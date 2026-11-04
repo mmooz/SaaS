@@ -1,0 +1,105 @@
+/* ============================================================
+   鲜衡云 · 设计令牌（Design Tokens）
+   生鲜超市场景：主色为生鲜绿，辅以暖橙（丰收/促销）。
+   中性色带微绿倾向，保持整体一致的"新鲜感"。
+   ============================================================ */
+:root {
+  /* --- 品牌色（OKLCH 感知均匀） --- */
+  --brand: oklch(52% 0.15 152);            /* 生鲜绿：主操作、强调 */
+  --brand-deep: oklch(38% 0.12 152);       /* 深绿：悬停、深色标题 */
+  --brand-soft: oklch(94% 0.06 152);       /* 浅绿：选中背景、品牌浅底 */
+  --accent: oklch(70% 0.17 60);            /* 暖橙：促销、高亮、丰收 */
+  --accent-soft: oklch(94% 0.06 60);       /* 浅橙背景 */
+
+  /* --- 中性色（带微绿倾向，chroma≈0.01） --- */
+  --neutral-50: oklch(98% 0.008 152);
+  --neutral-100: oklch(95.5% 0.012 152);
+  --neutral-200: oklch(91% 0.015 152);
+  --neutral-300: oklch(84% 0.018 152);
+  --neutral-400: oklch(66% 0.02 152);
+  --neutral-500: oklch(50% 0.02 152);
+  --neutral-600: oklch(40% 0.02 152);
+  --neutral-700: oklch(30% 0.018 152);
+  --neutral-800: oklch(22% 0.015 152);
+  --neutral-900: oklch(15% 0.012 152);
+
+  /* --- 语义色 --- */
+  --success: oklch(56% 0.16 155);
+  --warning: oklch(72% 0.16 75);
+  --danger: oklch(55% 0.19 25);
+  --info: oklch(60% 0.12 235);
+
+  /* --- 版式 --- */
+  --font-sans: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC',
+    system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-num: 'DIN Alternate', 'Segoe UI', var(--font-sans); /* 数字专用 */
+
+  /* --- 间距（8px 基准） --- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* --- 圆角与阴影 --- */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 1px 2px oklch(15% 0.012 152 / 0.06), 0 2px 6px oklch(15% 0.012 152 / 0.05);
+  --shadow-md: 0 4px 12px oklch(15% 0.012 152 / 0.1), 0 2px 4px oklch(15% 0.012 152 / 0.06);
+  --shadow-lg: 0 12px 32px oklch(15% 0.012 152 / 0.16), 0 4px 8px oklch(15% 0.012 152 / 0.08);
+}
+
+/* --- 全局基础样式 --- */
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--neutral-800);
+  background: var(--neutral-50);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 {
+  color: var(--neutral-900);
+  margin: 0;
+}
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- 覆盖 Element Plus 主题色，统一到品牌绿 --- */
+:root {
+  --el-color-primary: var(--brand);
+  --el-color-primary-light-3: oklch(62% 0.13 152);
+  --el-color-primary-light-5: oklch(74% 0.1 152);
+  --el-color-primary-light-7: oklch(86% 0.07 152);
+  --el-color-primary-light-8: oklch(91% 0.05 152);
+  --el-color-primary-light-9: oklch(95% 0.03 152);
+  --el-color-primary-dark-2: var(--brand-deep);
+  --el-border-radius-base: var(--radius-sm);
+  --el-font-family: var(--font-sans);
+}
+
+/* --- 滚动条 --- */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--neutral-300);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
