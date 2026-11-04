@@ -278,16 +278,23 @@ const tareOffset = ref(0)
 let weighTimer = null
 let stableCount = 0
 
-// 开始模拟称重：重量渐增，连续稳定判定
+// 开始模拟称重：重量渐增至固定目标后小幅抖动，连续稳定判定
 const startWeighing = () => {
   stopWeighing()
   weight.value = 0
   weightStable.value = false
   stableCount = 0
   tareOffset.value = 0
+  // 固定目标重量：仅在称重开始时随机一次，之后重量向该目标收敛
+  const target = 0.5 + Math.random() * 0.8
   weighTimer = setInterval(() => {
-    const target = 0.5 + Math.random() * 0.8
-    weight.value = Math.min(target, weight.value + 0.15 + Math.random() * 0.3)
+    if (weight.value < target) {
+      // 未达到目标：按步长渐增（模拟放上秤盘的过程）
+      weight.value = Math.min(target, weight.value + 0.2 + Math.random() * 0.25)
+    } else {
+      // 已达到目标：±0.005 小幅抖动（模拟真实秤的微小波动）
+      weight.value = target + (Math.random() - 0.5) * 0.01
+    }
     const cur = weight.value - tareOffset.value
     const delta = Math.abs(cur - prevWeight)
     prevWeight = cur
@@ -380,6 +387,9 @@ const confirmPay = () => {
   }
   const weightedCount = cart.value.filter((i) => i.weighted).length
   payDialog.value = false
+  // 重置支付输入，避免下次打开残留上次的实收金额/手机号
+  cashReceived.value = ''
+  memberMobile.value = ''
   ElMessage.success(
     `收款成功 ¥${totalAmount.value.toFixed(2)} · 已打印小票${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,
   )
