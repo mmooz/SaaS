@@ -3,6 +3,15 @@ node_modules/
 dist/
 .vite/
 
+# 后端环境与本地数据库
+backend/.venv/
+backend/pos.db
+backend/.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+
 # 日志与系统文件
 *.log
 .DS_Store

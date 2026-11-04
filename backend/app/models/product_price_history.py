@@ -1,0 +1,27 @@
+"""价格历史模型：商品调价留痕。"""
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, func
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.database import Base
+
+
+class ProductPriceHistory(Base):
+    """商品价格变更历史表：记录每次调价的旧价/新价与操作人。"""
+
+    __tablename__ = "product_price_history"
+
+    # 主键
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # 关联商品
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True, nullable=False)
+    # 调价前价格
+    old_price: Mapped[float] = mapped_column(Float, nullable=False)
+    # 调价后价格
+    new_price: Mapped[float] = mapped_column(Float, nullable=False)
+    # 操作人用户 ID
+    operator_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 变更时间
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

@@ -1,0 +1,7 @@
+# Web API 后端依赖（SQLite 起步，预留 PostgreSQL 切换）
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+sqlalchemy==2.0.*
+alembic==1.14.*
+pydantic==2.10.*
+pydantic-settings==2.7.*
