@@ -4,6 +4,9 @@ node_modules/
 # 构建产物
 dist/
 
+# Vite 缓存
+.vite/
+
 # 本地缓存与截图
 .screenshots/
 
