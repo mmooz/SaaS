@@ -20,11 +20,13 @@ struct ScaleState(Mutex<Box<dyn WeighScale + Send>>);
 /// - connection: 连接方式（mock/serial/tcp）
 /// - port_name: 串口名称（serial 时使用）
 /// - baud_rate: 波特率（serial 时使用）
+/// - tcp_addr: 网口地址 ip:port（tcp 时使用）
 #[tauri::command]
 fn connect_scale(
     connection: String,
     port_name: Option<String>,
     baud_rate: Option<u32>,
+    tcp_addr: Option<String>,
     state: State<'_, ScaleState>,
 ) -> Result<String, String> {
     let scale_conn = match connection.as_str() {
@@ -33,7 +35,12 @@ fn connect_scale(
         "tcp" => ScaleConnection::Tcp,
         _ => return Err(format!("未知秤连接方式: {connection}")),
     };
-    let mut scale = ScaleFactory::create(&scale_conn, port_name.as_deref(), baud_rate);
+    let mut scale = ScaleFactory::create(
+        &scale_conn,
+        port_name.as_deref(),
+        baud_rate,
+        tcp_addr.as_deref(),
+    );
     scale.connect()?;
     let kind = scale.kind();
     *state.0.lock().unwrap() = scale;
@@ -126,7 +133,7 @@ fn native_print_supported() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 初始状态使用模拟秤（无硬件时可正常开发调试）
-    let initial_scale = ScaleFactory::create(&ScaleConnection::Mock, None, None);
+    let initial_scale = ScaleFactory::create(&ScaleConnection::Mock, None, None, None);
     tauri::Builder::default()
         .manage(ScaleState(Mutex::new(initial_scale)))
         .invoke_handler(tauri::generate_handler![

@@ -6,6 +6,7 @@
 pub mod mock_scale;
 pub mod scale_factory;
 pub mod serial_scale;
+pub mod tcp_scale;
 pub mod weigh_scale;
 
 pub use scale_factory::ScaleFactory;

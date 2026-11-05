@@ -49,7 +49,7 @@ impl SerialScale {
     }
 
     /// 解析一行数据帧中的重量（kg）：取行内首个可解析的数值
-    fn parse_weight_line(line: &str) -> Option<f64> {
+    pub(crate) fn parse_weight_line(line: &str) -> Option<f64> {
         // 以非数值字符为分隔符切分，再逐个尝试解析（如 "1.234 kg" -> 1.234）
         line.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
             .filter(|s| !s.is_empty())
