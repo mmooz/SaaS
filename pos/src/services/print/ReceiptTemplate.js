@@ -2,6 +2,7 @@
  * 小票模板：生成 58mm / 80mm 热敏小票的完整 HTML 文档。
  */
 import { PrintFormatter as F } from './PrintFormatter.js'
+import { Code128 } from './Code128.js'
 
 export class ReceiptTemplate {
   /**
@@ -79,8 +80,8 @@ export class ReceiptTemplate {
   .item-line { display: flex; justify-content: space-between; font-size: 10px; }
   .row { display: flex; justify-content: space-between; line-height: 16px; }
   .row.total { font-size: 13px; font-weight: 700; }
-  .barcode { display: flex; height: 30px; gap: 1px; margin-top: 6px; }
-  .barcode i { display: block; height: 100%; background: #000; }
+  .barcode { height: 30px; margin-top: 6px; }
+  .barcode svg { display: block; width: 100%; height: 100%; }
   .code-text { text-align: center; font-size: 10px; letter-spacing: 1px; margin-top: 2px; }
   .footer { text-align: center; font-size: 10px; margin-top: 6px; }
 </style>
@@ -122,14 +123,12 @@ export class ReceiptTemplate {
   }
 
   /**
-   * 生成伪条码条带（按字符编码映射条宽，仅用于示意打印效果）
+   * 生成 CODE128 条码 SVG 图形
    * @param {string} text 条码内容
-   * @returns {string} 条带 HTML
+   * @returns {string} 条码 SVG，内容不可编码时返回空字符串
    */
   barcode(text) {
-    const chars = String(text || '0')
-    return [...chars]
-      .map((ch) => `<i style="width:${(ch.charCodeAt(0) % 3) + 1}px"></i>`)
-      .join('')
+    if (!Code128.isValid(text)) return ''
+    return Code128.toSvg(text, { height: 40 })
   }
 }

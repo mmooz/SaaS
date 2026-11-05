@@ -2,6 +2,7 @@
  * 称重标签模板：生成 40mm×30mm 价格标签的完整 HTML 文档。
  */
 import { PrintFormatter as F } from './PrintFormatter.js'
+import { Code128 } from './Code128.js'
 
 export class LabelTemplate {
   /**
@@ -38,8 +39,8 @@ export class LabelTemplate {
   .weight { font-size: 15px; font-weight: 700; text-align: center; line-height: 18px; }
   .price { display: flex; justify-content: space-between; font-size: 9px; }
   .amount { display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; }
-  .barcode { display: flex; height: 12px; gap: 1px; justify-content: center; margin-top: 2px; }
-  .barcode i { display: block; height: 100%; background: #000; }
+  .barcode { height: 12px; margin-top: 2px; }
+  .barcode svg { display: block; width: 100%; height: 100%; }
   .code-text { text-align: center; font-size: 7px; letter-spacing: 1px; }
   .time { text-align: center; font-size: 7px; }
 </style>
@@ -52,7 +53,7 @@ export class LabelTemplate {
     <span>单价 ${F.money(item.price)}/kg</span>
     <span>金额 ${F.money(item.amount)}</span>
   </div>
-  <div class="barcode">${this.barcodeBars(code)}</div>
+  <div class="barcode">${this.barcode(code)}</div>
   <div class="code-text">${F.escape(code)}</div>
   <div class="time">${F.escape(printTime)}</div>
 </body>
@@ -81,7 +82,7 @@ export class LabelTemplate {
           <span>单价 ${F.money(item.price)}/kg</span>
           <span>金额 ${F.money(item.amount)}</span>
         </div>
-        <div class="barcode">${this.barcodeBars(code)}</div>
+        <div class="barcode">${this.barcode(code)}</div>
         <div class="code-text">${F.escape(code)}</div>
         <div class="time">${F.escape(printTime)}</div>
       </div>`
@@ -108,8 +109,8 @@ export class LabelTemplate {
   }
   .weight { font-size: 15px; font-weight: 700; text-align: center; line-height: 18px; }
   .price { display: flex; justify-content: space-between; font-size: 9px; }
-  .barcode { display: flex; height: 12px; gap: 1px; justify-content: center; margin-top: 2px; }
-  .barcode i { display: block; height: 100%; background: #000; }
+  .barcode { height: 12px; margin-top: 2px; }
+  .barcode svg { display: block; width: 100%; height: 100%; }
   .code-text { text-align: center; font-size: 7px; letter-spacing: 1px; }
   .time { text-align: center; font-size: 7px; }
 </style>
@@ -132,13 +133,12 @@ export class LabelTemplate {
   }
 
   /**
-   * 生成伪条码条带（按字符编码映射条宽，仅用于示意打印效果）
+   * 生成 CODE128 条码 SVG 图形
    * @param {string} text 条码内容
-   * @returns {string} 条带 HTML
+   * @returns {string} 条码 SVG，内容不可编码时返回空字符串
    */
-  barcodeBars(text) {
-    return [...String(text || '0')]
-      .map((ch) => `<i style="width:${(ch.charCodeAt(0) % 2) + 1}px"></i>`)
-      .join('')
+  barcode(text) {
+    if (!Code128.isValid(text)) return ''
+    return Code128.toSvg(text, { height: 40 })
   }
 }
