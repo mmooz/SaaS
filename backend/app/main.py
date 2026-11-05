@@ -5,17 +5,21 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import categories, inventory, members, orders, products, promotions, reports, sync
+from app.api import auth, categories, inventory, members, orders, products, promotions, reports, sync
 from app.config import settings
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app import models  # 导入模型模块，确保建表时注册所有表
+from app.services.user_seeder import UserSeeder
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时按配置自动建表（开发期便利，生产用 Alembic）。"""
+    """应用生命周期：启动时按配置自动建表并写入默认账号（开发期便利，生产用 Alembic）。"""
     if settings.auto_create_tables:
         Base.metadata.create_all(bind=engine)
+    if settings.auto_seed_users:
+        with SessionLocal() as db:
+            UserSeeder.seed(db)
     yield
 
 
@@ -41,6 +45,7 @@ app.add_middleware(
 )
 
 # 注册业务路由
+app.include_router(auth.router)
 app.include_router(categories.router)
 app.include_router(products.router)
 app.include_router(orders.router)

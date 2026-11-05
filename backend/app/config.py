@@ -17,6 +17,14 @@ class Settings(BaseSettings):
     # 是否在启动时自动建表（开发期用；生产环境使用 Alembic 迁移）
     auto_create_tables: bool = True
 
+    # 是否在启动时写入默认登录账号（仅 users 表为空时生效，开发期便利）
+    auto_seed_users: bool = True
+
+    # 登录令牌签名密钥（生产环境务必通过环境变量覆盖）
+    auth_secret: str = "xianheng-pos-dev-secret"
+    # 登录令牌有效期（小时）
+    auth_expire_hours: int = 12
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

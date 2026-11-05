@@ -1,0 +1,63 @@
+"""登录认证 API：账号密码登录、令牌换取当前用户信息。"""
+
+from fastapi import APIRouter, Depends, Header, HTTPException
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.database import get_db
+from app.models import User
+from app.schemas.login_request import LoginRequest
+from app.schemas.login_response import LoginResponse
+from app.schemas.user_out import UserOut
+from app.services.password_hasher import PasswordHasher
+from app.services.token_service import TokenService
+
+# 登录路由
+router = APIRouter(prefix="/api/auth", tags=["登录认证"])
+
+# 令牌服务实例（密钥与有效期来自配置）
+token_service = TokenService(settings.auth_secret, settings.auth_expire_hours)
+
+
+def _current_user(db: Session, authorization: str | None) -> User:
+    """按请求头中的 Bearer 令牌解析当前登录用户。
+
+    :param db: 数据库会话
+    :param authorization: Authorization 请求头
+    :return: 登录用户 ORM 对象
+    """
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="请先登录")
+    user_id = token_service.verify(authorization[7:].strip())
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+    user = db.get(User, user_id)
+    if not user or not user.enabled:
+        raise HTTPException(status_code=401, detail="账号不存在或已停用")
+    return user
+
+
+@router.post("/login", response_model=LoginResponse)
+def login(data: LoginRequest, db: Session = Depends(get_db)):
+    """账号密码登录：校验通过后签发令牌并返回用户信息。"""
+    user = db.scalar(select(User).where(User.username == data.username.strip()))
+    # 账号不存在与密码错误统一提示，避免暴露账号是否存在
+    if not user or not PasswordHasher.verify(data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="账号或密码错误")
+    # 停用账号禁止登录
+    if not user.enabled:
+        raise HTTPException(status_code=403, detail="账号已停用，请联系管理员")
+    return LoginResponse(
+        access_token=token_service.issue(user.id),
+        expires_in=token_service.expire_seconds,
+        user=UserOut.model_validate(user),
+    )
+
+
+@router.get("/me", response_model=UserOut)
+def current_user(
+    authorization: str | None = Header(None), db: Session = Depends(get_db)
+):
+    """按令牌查询当前登录用户（用于前端恢复登录状态时校验）。"""
+    return UserOut.model_validate(_current_user(db, authorization))
