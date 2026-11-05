@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.order_item_out import OrderItemOut
+from app.schemas.snowflake_id import SnowflakeId
 
 
 class OrderOut(BaseModel):
@@ -13,15 +14,15 @@ class OrderOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 订单 ID
-    id: int
+    id: SnowflakeId
     # 订单号
     order_no: str
     # 预留门店 ID
     store_id: int
     # 收银员用户 ID
-    cashier_id: int | None
+    cashier_id: SnowflakeId | None
     # 交接班会话 ID
-    shift_id: int | None
+    shift_id: SnowflakeId | None
     # 订单状态
     status: str
     # 应收总额
@@ -31,7 +32,7 @@ class OrderOut(BaseModel):
     # 支付方式明细
     pay_details: str | None
     # 关联会员 ID
-    member_id: int | None
+    member_id: SnowflakeId | None
     # 关联会员手机号（退款按手机号搜索时展示）
     member_mobile: str | None = None
     # 已退款金额（由退款记录累计）

@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class Category(Base):
@@ -14,11 +15,13 @@ class Category(Base):
     __tablename__ = "categories"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 分类名称
     name: Mapped[str] = mapped_column(String(50), nullable=False)
     # 上级分类 ID（空表示一级分类）
-    parent_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("categories.id"), nullable=True
+    )
     # 排序值（越小越靠前）
     sort: Mapped[int] = mapped_column(Integer, default=0)
     # 是否启用

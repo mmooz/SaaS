@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class OrderItem(Base):
@@ -14,11 +15,13 @@ class OrderItem(Base):
     __tablename__ = "order_items"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 所属订单
-    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True, nullable=False)
+    order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("orders.id"), index=True, nullable=False
+    )
     # 商品 ID（可空：商品删除后仍保留快照）
-    product_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 商品名称（快照，避免商品改名影响历史订单）
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     # 数量（按件商品）

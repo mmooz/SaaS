@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class RefundItemOut(BaseModel):
     """退款明细响应体：被退商品行快照。"""
@@ -9,9 +11,9 @@ class RefundItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 退款明细主键
-    id: int
+    id: SnowflakeId
     # 原订单明细主键
-    order_item_id: int | None
+    order_item_id: SnowflakeId | None
     # 商品名称
     name: str
     # 退货数量（按件商品）

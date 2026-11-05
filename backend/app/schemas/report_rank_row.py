@@ -2,12 +2,14 @@
 
 from pydantic import BaseModel
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class ReportRankRow(BaseModel):
     """商品排行行：销量、销售额与占比。"""
 
     # 商品 ID（快照明细可能为空）
-    product_id: int | None = None
+    product_id: SnowflakeId | None = None
     # 商品名称
     name: str
     # 分类名称

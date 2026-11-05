@@ -2,12 +2,14 @@
 
 from pydantic import BaseModel
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class ReportMemberRow(BaseModel):
     """会员消费行：消费笔数、金额与占比。"""
 
     # 会员 ID
-    member_id: int
+    member_id: SnowflakeId
     # 会员姓名
     name: str
     # 会员等级：normal/silver/gold

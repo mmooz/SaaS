@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class Product(Base):
@@ -14,7 +15,7 @@ class Product(Base):
     __tablename__ = "products"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 商品条码（唯一，含生鲜店内码）
     barcode: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     # 商品名称
@@ -22,7 +23,9 @@ class Product(Base):
     # 拼音码（用于快速检索）
     pinyin: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # 所属分类
-    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"), nullable=True)
+    category_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("categories.id"), nullable=True
+    )
     # 计价方式：weigh=按重量称重，count=按件
     pricing_mode: Mapped[str] = mapped_column(String(10), default="weigh")
     # 计量单位（kg/g/个/袋/盒/瓶）

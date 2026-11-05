@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class SyncRecord(Base):
@@ -14,7 +15,7 @@ class SyncRecord(Base):
     __tablename__ = "sync_records"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 同步方向：down=服务端→收银端，up=收银端→服务端
     direction: Mapped[str] = mapped_column(String(8), nullable=False)
     # 同步目标（商品/订单/库存变动等）

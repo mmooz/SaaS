@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class MemberTransactionOut(BaseModel):
     """会员流水响应体：展示充值/消费/积分变动明细。"""
@@ -11,9 +13,9 @@ class MemberTransactionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 流水 ID
-    id: int
+    id: SnowflakeId
     # 关联会员 ID
-    member_id: int
+    member_id: SnowflakeId
     # 类型：recharge/consume/refund/points
     type: str
     # 金额变动
@@ -21,6 +23,6 @@ class MemberTransactionOut(BaseModel):
     # 积分变动
     points: int
     # 操作人用户 ID
-    operator_id: int | None
+    operator_id: SnowflakeId | None
     # 流水时间
     created_at: datetime

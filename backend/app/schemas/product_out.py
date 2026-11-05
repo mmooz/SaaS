@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class ProductOut(BaseModel):
     """商品响应体：输出全部档案字段与分类名称。"""
@@ -11,7 +13,7 @@ class ProductOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 商品 ID
-    id: int
+    id: SnowflakeId
     # 商品条码
     barcode: str
     # 商品名称
@@ -19,7 +21,7 @@ class ProductOut(BaseModel):
     # 拼音码
     pinyin: str | None
     # 所属分类 ID
-    category_id: int | None
+    category_id: SnowflakeId | None
     # 分类名称（联表查询时填充）
     category_name: str | None = None
     # 计价方式

@@ -1,9 +1,10 @@
 """退款明细模型：退款单内的每个退货商品行。"""
 
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class RefundItem(Base):
@@ -12,11 +13,13 @@ class RefundItem(Base):
     __tablename__ = "refund_items"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 所属退款单
-    refund_id: Mapped[int] = mapped_column(ForeignKey("refund_records.id"), index=True, nullable=False)
+    refund_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("refund_records.id"), index=True, nullable=False
+    )
     # 原订单明细主键（用于避免同一行重复退货）
-    order_item_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    order_item_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     # 商品名称（快照）
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     # 退货数量（按件商品）

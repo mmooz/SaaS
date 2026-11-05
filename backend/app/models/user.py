@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class User(Base):
@@ -14,7 +15,7 @@ class User(Base):
     __tablename__ = "users"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 登录用户名（唯一）
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     # 密码哈希

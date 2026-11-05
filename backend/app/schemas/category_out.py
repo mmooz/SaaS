@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class CategoryOut(BaseModel):
     """分类响应体：包含递归子分类结构。"""
@@ -11,11 +13,11 @@ class CategoryOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 分类 ID
-    id: int
+    id: SnowflakeId
     # 分类名称
     name: str
     # 上级分类 ID
-    parent_id: int | None
+    parent_id: SnowflakeId | None
     # 排序值
     sort: int
     # 是否启用

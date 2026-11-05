@@ -4,12 +4,14 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class OperationLogOut(BaseModel):
     """操作日志响应体：含操作人账号、姓名与角色。"""
 
     # 日志 ID
-    id: int
+    id: SnowflakeId
     # 操作人账号（无关联用户时为空）
     operator: str | None = None
     # 操作人姓名

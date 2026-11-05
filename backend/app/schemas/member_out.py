@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class MemberOut(BaseModel):
     """会员响应体：输出档案与积分/储值余额。"""
@@ -11,7 +13,7 @@ class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 会员 ID
-    id: int
+    id: SnowflakeId
     # 手机号
     mobile: str
     # 姓名

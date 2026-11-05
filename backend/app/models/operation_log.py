@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class OperationLog(Base):
@@ -14,9 +15,9 @@ class OperationLog(Base):
     __tablename__ = "operation_logs"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 操作人用户 ID
-    operator_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    operator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 操作动作（如 调价/退款/盘点/登录）
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     # 操作详情（JSON 或文本）

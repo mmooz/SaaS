@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class InventoryMovement(Base):
@@ -14,9 +15,11 @@ class InventoryMovement(Base):
     __tablename__ = "inventory_movements"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 关联商品
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True, nullable=False)
+    product_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("products.id"), index=True, nullable=False
+    )
     # 类型：inbound=入库，sale=销售，stocktake=盘点，breakage=报损
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     # 变动数量（按件商品）
@@ -24,9 +27,9 @@ class InventoryMovement(Base):
     # 变动重量 kg（称重商品）
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 来源单据 ID（订单/入库单/盘点单等）
-    ref_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ref_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 操作人用户 ID
-    operator_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    operator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 预留门店 ID（多店扩展）
     store_id: Mapped[int] = mapped_column(Integer, default=1)
     # 是否已同步到服务端

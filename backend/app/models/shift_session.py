@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Float, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class ShiftSession(Base):
@@ -14,9 +15,9 @@ class ShiftSession(Base):
     __tablename__ = "shift_sessions"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 收银员用户 ID
-    cashier_id: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    cashier_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
     # 预留门店 ID（多店扩展）
     store_id: Mapped[int] = mapped_column(Integer, default=1)
     # 接班时间

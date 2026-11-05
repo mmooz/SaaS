@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class UserAdminOut(BaseModel):
     """用户管理响应体：包含启用状态与创建时间（不含密码）。"""
@@ -11,7 +13,7 @@ class UserAdminOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 用户 ID
-    id: int
+    id: SnowflakeId
     # 登录用户名
     username: str
     # 姓名

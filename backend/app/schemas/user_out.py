@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class UserOut(BaseModel):
     """用户响应体：登录后可展示的身份信息（不含密码）。"""
@@ -9,7 +11,7 @@ class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 用户 ID
-    id: int
+    id: SnowflakeId
     # 登录账号（工号）
     username: str
     # 姓名

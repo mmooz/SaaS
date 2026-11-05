@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # 登录令牌有效期（小时）
     auth_expire_hours: int = 12
 
+    # 雪花 ID 机器位与数据中心位（0-31，多实例部署时需各不相同）
+    snowflake_worker_id: int = 1
+    snowflake_datacenter_id: int = 1
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

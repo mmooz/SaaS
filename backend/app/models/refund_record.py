@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class RefundRecord(Base):
@@ -14,11 +15,13 @@ class RefundRecord(Base):
     __tablename__ = "refund_records"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 退款单号（唯一，收银端生成）
     refund_no: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
     # 原订单主键
-    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True, nullable=False)
+    order_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("orders.id"), index=True, nullable=False
+    )
     # 原订单号（冗余保存，便于查询展示）
     order_no: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     # 退款类型：full=整单退款，item=单项退货
@@ -28,9 +31,9 @@ class RefundRecord(Base):
     # 退款原因
     reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
     # 操作收银员用户 ID
-    cashier_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cashier_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 店长授权人用户 ID（非本人订单退款时记录）
-    authorizer_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    authorizer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 退款时间
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

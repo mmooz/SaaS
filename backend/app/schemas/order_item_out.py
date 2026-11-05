@@ -3,6 +3,7 @@
 from pydantic import ConfigDict
 
 from app.schemas.order_item_create import OrderItemCreate
+from app.schemas.snowflake_id import SnowflakeId
 
 
 class OrderItemOut(OrderItemCreate):
@@ -11,6 +12,8 @@ class OrderItemOut(OrderItemCreate):
     model_config = ConfigDict(from_attributes=True)
 
     # 明细主键（退款时用于定位商品行）
-    id: int
+    id: SnowflakeId
+    # 商品 ID（输出为字符串，避免前端精度丢失）
+    product_id: SnowflakeId | None = None
     # 是否已退货（该行已存在于退款明细中）
     refunded: bool = False

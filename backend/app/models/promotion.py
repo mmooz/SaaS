@@ -2,10 +2,11 @@
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.services.snowflake import next_id
 
 
 class Promotion(Base):
@@ -14,7 +15,7 @@ class Promotion(Base):
     __tablename__ = "promotions"
 
     # 主键
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 类型：special=限时特价，discount=折扣，full_reduce=满减满赠
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     # 促销名称

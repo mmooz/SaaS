@@ -4,6 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.snowflake_id import SnowflakeId
+
 
 class ShiftOut(BaseModel):
     """班次响应体。"""
@@ -11,9 +13,9 @@ class ShiftOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 班次主键
-    id: int
+    id: SnowflakeId
     # 收银员用户 ID
-    cashier_id: int
+    cashier_id: SnowflakeId
     # 接班时间
     start_at: datetime
     # 交班时间（空表示进行中）

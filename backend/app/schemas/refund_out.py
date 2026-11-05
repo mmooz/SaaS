@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.refund_item_out import RefundItemOut
+from app.schemas.snowflake_id import SnowflakeId
 
 
 class RefundOut(BaseModel):
@@ -13,7 +14,7 @@ class RefundOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     # 退款单主键
-    id: int
+    id: SnowflakeId
     # 退款单号
     refund_no: str
     # 原订单号
@@ -25,9 +26,9 @@ class RefundOut(BaseModel):
     # 退款原因
     reason: str | None
     # 操作收银员用户 ID
-    cashier_id: int | None
+    cashier_id: SnowflakeId | None
     # 店长授权人用户 ID
-    authorizer_id: int | None
+    authorizer_id: SnowflakeId | None
     # 退款时间
     created_at: datetime
     # 退款明细
