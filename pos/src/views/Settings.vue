@@ -95,9 +95,11 @@
                   clearable
                   filterable
                   placeholder="未选择（使用浏览器打印）"
+                  @change="refreshPrinterStatus"
                 >
                   <el-option v-for="p in systemPrinters" :key="p" :label="p" :value="p" />
                 </el-select>
+                <span v-if="labelStatusTip" class="field-tip">{{ labelStatusTip }}</span>
               </el-form-item>
               <el-form-item label="型号">
                 <el-input v-model="labelPrinter.model" size="large" class="set-input" />
@@ -134,9 +136,11 @@
                   clearable
                   filterable
                   placeholder="未选择（使用浏览器打印）"
+                  @change="refreshPrinterStatus"
                 >
                   <el-option v-for="p in systemPrinters" :key="p" :label="p" :value="p" />
                 </el-select>
+                <span v-if="receiptStatusTip" class="field-tip">{{ receiptStatusTip }}</span>
               </el-form-item>
               <el-form-item label="型号">
                 <el-input v-model="receiptPrinter.model" size="large" class="set-input" />
@@ -275,6 +279,10 @@ const systemPrinters = ref([])
 const loadingPrinters = ref(false)
 // 原生打印环境提示文案
 const nativeTip = ref('')
+// 已选标签打印机状态提示
+const labelStatusTip = ref('')
+// 已选小票打印机状态提示
+const receiptStatusTip = ref('')
 
 // 门店信息（默认值取自打印服务，保存后与打印模板保持一致）
 const storeForm = reactive({
@@ -311,6 +319,36 @@ const loadSystemPrinters = async () => {
     }
   } finally {
     loadingPrinters.value = false
+  }
+}
+
+/**
+ * 查询页面上已选打印机的当前状态并生成提示文案
+ * @returns {Promise<void>}
+ */
+const refreshPrinterStatus = async () => {
+  const targets = [
+    { name: labelPrinter.systemName, tip: labelStatusTip },
+    { name: receiptPrinter.systemName, tip: receiptStatusTip },
+  ]
+  for (const { name, tip } of targets) {
+    if (!name || !TauriPrintService.isAvailable()) {
+      tip.value = ''
+      continue
+    }
+    try {
+      const status = await TauriPrintService.printerStatus(name)
+      if (status && status.usable === false) {
+        const problems = status.problems && status.problems.length
+          ? status.problems.join('、')
+          : '状态异常'
+        tip.value = `状态：${problems}`
+      } else {
+        tip.value = '状态：正常'
+      }
+    } catch {
+      tip.value = '状态：打印机不存在或读取失败'
+    }
   }
 }
 
@@ -358,15 +396,15 @@ const buildPrintInfo = () => ({
 const testPrint = async (name) => {
   const orderNo = `TEST${Date.now()}`
   const info = buildPrintInfo()
-  let channel = 'html'
+  let result = { channel: 'html', reason: '' }
   if (name === '标签打印机') {
-    channel = await PrintService.printLabel(
+    result = await PrintService.printLabel(
       { orderNo },
       { productId: 1, name: '测试商品', weight: 0.52, price: 9.8, amount: 5.1 },
       info,
     )
   } else {
-    channel = await PrintService.printReceipt({
+    result = await PrintService.printReceipt({
       orderNo,
       cashierName: '测试收银员',
       totalAmount: 12.8,
@@ -380,12 +418,11 @@ const testPrint = async (name) => {
       ],
     }, info)
   }
-  if (channel === 'failed') {
-    const printerName = name === '标签打印机' ? info.labelPrinterName : info.receiptPrinterName
-    ElMessage.error(`测试打印失败：未找到系统打印机「${printerName}」，请刷新打印机列表后重新选择`)
+  if (result.channel === 'failed') {
+    ElMessage.error(`测试打印失败：${result.reason}`)
     return
   }
-  const channelText = channel === 'native' ? '原生直连' : '浏览器打印'
+  const channelText = result.channel === 'native' ? '原生直连' : '浏览器打印'
   ElMessage.success(`测试打印已发送：${name}（${channelText}）`)
 }
 
@@ -428,6 +465,7 @@ onMounted(() => {
   labelPrinter.systemName = PrintService.storeInfo.labelPrinterName || labelPrinter.systemName
   receiptPrinter.systemName = PrintService.storeInfo.receiptPrinterName || receiptPrinter.systemName
   loadSystemPrinters()
+  refreshPrinterStatus()
 })
 </script>
 

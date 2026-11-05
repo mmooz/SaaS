@@ -585,15 +585,15 @@ const confirmPay = async () => {
   // 自动打印：先小票（现金含实收/找零），再打印称重标签
   if (autoPrint.value && result.order) {
     const printOrder = OrderPrintMapper.fromSettle(result, meta)
-    // 等待小票结果，所选打印机缺失时明确提示收银员
-    const receiptChannel = await PrintService.printReceipt(printOrder)
-    if (receiptChannel === 'failed') {
-      ElMessage.error('小票打印失败：所选小票打印机不存在，请到设置页重新选择')
+    // 等待小票结果，打印机不可用时明确提示收银员
+    const receiptResult = await PrintService.printReceipt(printOrder)
+    if (receiptResult.channel === 'failed') {
+      ElMessage.error(`小票打印失败：${receiptResult.reason}`)
     }
     setTimeout(async () => {
-      const labelCount = await PrintService.printLabels(printOrder)
-      if (labelCount < 0) {
-        ElMessage.error('标签打印失败：所选标签打印机不存在，请到设置页重新选择')
+      const labelResult = await PrintService.printLabels(printOrder)
+      if (labelResult.channel === 'failed') {
+        ElMessage.error(`标签打印失败：${labelResult.reason}`)
       }
     }, 1200)
   }

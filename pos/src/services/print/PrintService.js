@@ -113,19 +113,27 @@ export class PrintService {
   }
 
   /**
-   * 校验系统打印机是否仍然存在（离线状态无法通过枚举判断，交由打印作业结果体现）
+   * 校验系统打印机是否可用：先确认仍然存在，再读取 Win32 状态位
    * @param {string} printerName 目标系统打印机名称
-   * @returns {Promise<boolean>} 存在时为 true
+   * @returns {Promise<{ ok: boolean, reason: string }>} 校验结果，不可用时 reason 为提示文案
    */
   static async checkPrinter(printerName) {
     try {
-      if (await TauriPrintService.hasPrinter(printerName)) return true
-      console.warn(`打印机「${printerName}」不存在或已被移除`)
-      return false
+      if (!(await TauriPrintService.hasPrinter(printerName))) {
+        return { ok: false, reason: `打印机「${printerName}」不存在或已被移除` }
+      }
+      const status = await TauriPrintService.printerStatus(printerName)
+      if (status && status.usable === false) {
+        const problems = Array.isArray(status.problems) && status.problems.length
+          ? status.problems.join('、')
+          : '状态异常'
+        return { ok: false, reason: `打印机「${printerName}」${problems}` }
+      }
+      return { ok: true, reason: '' }
     } catch (err) {
-      // 枚举失败时不阻断打印，交由后续原生打印结果决定
+      // 查询失败时不阻断打印，交由后续原生打印结果决定
       console.warn('校验打印机失败：', err)
-      return true
+      return { ok: true, reason: '' }
     }
   }
 
@@ -208,24 +216,25 @@ export class PrintService {
    * 打印小票：原生直连优先，未配置时回退 HTML
    * @param {object} order 小票数据模型（见 ReceiptTemplate）
    * @param {object|null} overrideInfo 临时打印配置（测试打印使用页面当前表单）
-   * @returns {Promise<'native'|'html'|'failed'>} 实际通道；所选打印机不存在时为 failed
+   * @returns {Promise<{ channel: 'native'|'html'|'failed', reason: string }>} 实际通道；打印机不可用时为 failed
    */
   static async printReceipt(order, overrideInfo = null) {
     const info = this.resolveInfo(overrideInfo)
     const printerName = info.receiptPrinterName
     if (this.shouldUseNative(printerName, info.printMode)) {
-      // 打印机已被移除时明确失败，不再静默弹浏览器打印框
-      if (!(await this.checkPrinter(printerName))) return 'failed'
+      // 打印机不存在或状态异常时明确失败，不再静默弹浏览器打印框
+      const check = await this.checkPrinter(printerName)
+      if (!check.ok) return { channel: 'failed', reason: check.reason }
       try {
         await TauriPrintService.printReceipt(printerName, this.buildReceiptJob(order, info))
-        return 'native'
+        return { channel: 'native', reason: '' }
       } catch (err) {
         console.warn('原生打印小票失败，回退 HTML 打印：', err)
       }
     }
     const template = new ReceiptTemplate()
     this.print(template.build(order, info))
-    return 'html'
+    return { channel: 'html', reason: '' }
   }
 
   /**
@@ -233,23 +242,24 @@ export class PrintService {
    * @param {object} order 订单信息
    * @param {object} item 称重商品
    * @param {object|null} overrideInfo 临时打印配置
-   * @returns {Promise<'native'|'html'|'failed'>} 实际通道；所选打印机不存在时为 failed
+   * @returns {Promise<{ channel: 'native'|'html'|'failed', reason: string }>} 实际通道；打印机不可用时为 failed
    */
   static async printLabel(order, item, overrideInfo = null) {
     const info = this.resolveInfo(overrideInfo)
     const printerName = info.labelPrinterName
     if (this.shouldUseNative(printerName, info.printMode)) {
-      if (!(await this.checkPrinter(printerName))) return 'failed'
+      const check = await this.checkPrinter(printerName)
+      if (!check.ok) return { channel: 'failed', reason: check.reason }
       try {
         await TauriPrintService.printLabels(printerName, this.buildLabelJob(order, [item], info))
-        return 'native'
+        return { channel: 'native', reason: '' }
       } catch (err) {
         console.warn('原生打印标签失败，回退 HTML 打印：', err)
       }
     }
     const template = new LabelTemplate()
     this.print(template.build(order, item, info))
-    return 'html'
+    return { channel: 'html', reason: '' }
   }
 
   /**
@@ -257,28 +267,29 @@ export class PrintService {
    * @param {object} order 订单信息
    * @param {Array} items 称重商品列表，缺省取订单内的称重明细
    * @param {object|null} overrideInfo 临时打印配置
-   * @returns {Promise<number>} 实际打印的标签数量；所选打印机不存在时返回 -1
+   * @returns {Promise<{ channel: 'native'|'html'|'failed'|'none', count: number, reason: string }>} 实际通道与打印张数
    */
   static async printLabels(order, items, overrideInfo = null) {
     const info = this.resolveInfo(overrideInfo)
     const list = (items || order.items || []).filter((i) => i.weighted)
-    if (!list.length) return 0
+    if (!list.length) return { channel: 'none', count: 0, reason: '' }
     const printerName = info.labelPrinterName
     if (this.shouldUseNative(printerName, info.printMode)) {
-      if (!(await this.checkPrinter(printerName))) return -1
+      const check = await this.checkPrinter(printerName)
+      if (!check.ok) return { channel: 'failed', count: 0, reason: check.reason }
       try {
         const count = await TauriPrintService.printLabels(
           printerName,
           this.buildLabelJob(order, list, info),
         )
-        return Number(count) || list.length
+        return { channel: 'native', count: Number(count) || list.length, reason: '' }
       } catch (err) {
         console.warn('原生打印标签失败，回退 HTML 打印：', err)
       }
     }
     const template = new LabelTemplate()
     this.print(template.buildMany(order, list, info))
-    return list.length
+    return { channel: 'html', count: list.length, reason: '' }
   }
 
   /**

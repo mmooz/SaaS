@@ -66,6 +66,15 @@ export class TauriPrintService {
   }
 
   /**
+   * 查询打印机当前状态
+   * @param {string} printerName 系统打印机名称
+   * @returns {Promise<{printerName: string, statusCode: number, usable: boolean, problems: string[]}>} 打印机状态
+   */
+  static printerStatus(printerName) {
+    return this.invoke('printer_status', { printerName })
+  }
+
+  /**
    * 原生直连打印小票（ESC/POS）
    * @param {string} printerName 系统打印机名称
    * @param {object} job 小票打印任务（字段与 Rust ReceiptJob 对应）

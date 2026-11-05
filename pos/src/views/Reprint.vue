@@ -187,9 +187,9 @@ const currentLabelOrder = computed(() =>
 
 // 补打小票：调用打印通道重新出票
 const reprintReceipt = async (row) => {
-  const channel = await PrintService.printReceipt(row.printModel)
-  if (channel === 'failed') {
-    ElMessage.error('补打失败：所选小票打印机不存在，请到设置页重新选择')
+  const result = await PrintService.printReceipt(row.printModel)
+  if (result.channel === 'failed') {
+    ElMessage.error(`补打失败：${result.reason}`)
     return
   }
   ElMessage.success(`已补打小票：${row.orderNo}`)
@@ -197,9 +197,9 @@ const reprintReceipt = async (row) => {
 
 // 补打单个价格标签
 const reprintLabel = async (item) => {
-  const channel = await PrintService.printLabel(currentLabelOrder.value.printModel, item)
-  if (channel === 'failed') {
-    ElMessage.error('补打失败：所选标签打印机不存在，请到设置页重新选择')
+  const result = await PrintService.printLabel(currentLabelOrder.value.printModel, item)
+  if (result.channel === 'failed') {
+    ElMessage.error(`补打失败：${result.reason}`)
     return
   }
   ElMessage.success(`已补打标签：${item.name}`)
@@ -207,15 +207,15 @@ const reprintLabel = async (item) => {
 
 // 补打全部价格标签
 const reprintLabelAll = async () => {
-  const count = await PrintService.printLabels(
+  const result = await PrintService.printLabels(
     currentLabelOrder.value.printModel,
     currentLabelOrder.value.printModel.items,
   )
-  if (count < 0) {
-    ElMessage.error('补打失败：所选标签打印机不存在，请到设置页重新选择')
+  if (result.channel === 'failed') {
+    ElMessage.error(`补打失败：${result.reason}`)
     return
   }
-  ElMessage.success(`已补打 ${count} 张价格标签`)
+  ElMessage.success(`已补打 ${result.count} 张价格标签`)
 }
 </script>
 
