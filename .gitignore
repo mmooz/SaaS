@@ -2,6 +2,8 @@
 node_modules/
 dist/
 .vite/
+# Rust / Tauri 构建产物
+target/
 
 # 后端环境与本地数据库
 backend/.venv/

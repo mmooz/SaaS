@@ -1,0 +1,24 @@
+[package]
+name = "pos"
+version = "0.1.0"
+description = "鲜衡 POS 收银终端（Tauri 桌面壳 + Rust 称重模块）"
+edition = "2021"
+
+[lib]
+name = "pos_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 串口通信（连接电子秤）
+serialport = "4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
