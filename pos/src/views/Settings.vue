@@ -192,9 +192,13 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Check, Odometer, Printer, Refresh, Shop } from '@element-plus/icons-vue'
+import { PrintService } from '../services/print/PrintService'
+
+/** 设置项在 localStorage 中的键名 */
+const SETTINGS_KEY = 'pos_settings'
 
 // 左侧菜单项与当前选中项
 const activeMenu = ref('scale')
@@ -216,17 +220,17 @@ const scaleForm = reactive({
 const comPorts = ['COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8']
 const baudRates = [9600, 4800]
 
-// 打印机配置（模拟数据）
+// 打印机配置（随保存写入本地设置）
 const labelPrinter = reactive({ model: '佳博 GP-1224T', port: 'USB', paperWidth: '60mm' })
 const receiptPrinter = reactive({ model: '佳博 XP-58III', port: 'USB', paperWidth: '58mm' })
 
-// 门店信息（模拟数据）
+// 门店信息（默认值取自打印服务，保存后与打印模板保持一致）
 const storeForm = reactive({
-  name: '鲜果超市 · 1号店',
-  phone: '13800000000',
-  address: '幸福路 88 号',
-  receiptHeader: '鲜衡生鲜 · 欢迎光临',
-  slogan: '新鲜每一天，健康一家人',
+  name: PrintService.storeInfo.storeName,
+  phone: PrintService.storeInfo.phone,
+  address: PrintService.storeInfo.storeAddress,
+  receiptHeader: PrintService.storeInfo.receiptHeader,
+  slogan: PrintService.storeInfo.slogan,
 })
 
 // 同步状态（模拟数据）
@@ -238,14 +242,50 @@ const syncLogs = ref([
   { time: '2026-11-04 20:00', content: '同步收银班次数据', ok: false },
 ])
 
-// 保存设置：演示成功提示
+// 保存设置：写入 localStorage，并同步门店打印信息
 const saveSettings = () => {
-  ElMessage.success('设置已保存（演示）')
+  const settings = {
+    scale: { ...scaleForm },
+    labelPrinter: { ...labelPrinter },
+    receiptPrinter: { ...receiptPrinter },
+    store: { ...storeForm },
+  }
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+  PrintService.saveStoreInfo({
+    storeName: storeForm.name,
+    storeAddress: storeForm.address,
+    phone: storeForm.phone,
+    receiptHeader: storeForm.receiptHeader,
+    slogan: storeForm.slogan,
+    paperWidth: parseInt(receiptPrinter.paperWidth, 10) || 58,
+  })
+  ElMessage.success('设置已保存')
 }
 
-// 测试打印：演示成功提示
+// 测试打印：按打印机类型生成样例并送入打印通道
 const testPrint = (name) => {
-  ElMessage.success(`测试打印成功：${name}（演示）`)
+  const orderNo = `TEST${Date.now()}`
+  if (name === '标签打印机') {
+    PrintService.printLabel(
+      { orderNo },
+      { productId: 1, name: '测试商品', weight: 0.52, price: 9.8, amount: 5.1 },
+    )
+  } else {
+    PrintService.printReceipt({
+      orderNo,
+      cashierName: '测试收银员',
+      totalAmount: 12.8,
+      discount: 0,
+      payMethod: '现金',
+      cashReceived: 20,
+      change: 7.2,
+      items: [
+        { name: '测试称重商品', weighted: true, weight: 0.52, price: 9.8, amount: 5.1 },
+        { name: '测试按件商品', weighted: false, qty: 1, price: 7.7, amount: 7.7 },
+      ],
+    })
+  }
+  ElMessage.success(`测试打印已发送：${name}`)
 }
 
 // 立即同步：更新同步状态并追加日志（演示）
@@ -256,6 +296,30 @@ const doSync = () => {
   syncLogs.value.unshift({ time: syncInfo.lastTime, content: '全量同步完成', ok: true })
   ElMessage.success('同步完成，数据已是最新（演示）')
 }
+
+// 启动时恢复本地设置；门店信息优先使用打印服务已保存的值
+onMounted(() => {
+  PrintService.loadStoreInfo()
+  Object.assign(storeForm, {
+    name: PrintService.storeInfo.storeName,
+    phone: PrintService.storeInfo.phone,
+    address: PrintService.storeInfo.storeAddress,
+    receiptHeader: PrintService.storeInfo.receiptHeader,
+    slogan: PrintService.storeInfo.slogan,
+  })
+
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    if (!raw) return
+    const data = JSON.parse(raw)
+    if (data.scale) Object.assign(scaleForm, data.scale)
+    if (data.labelPrinter) Object.assign(labelPrinter, data.labelPrinter)
+    if (data.receiptPrinter) Object.assign(receiptPrinter, data.receiptPrinter)
+    if (data.store) Object.assign(storeForm, data.store)
+  } catch {
+    ElMessage.warning('本地设置已损坏，已恢复默认值')
+  }
+})
 </script>
 
 <style scoped>

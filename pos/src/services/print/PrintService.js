@@ -7,15 +7,51 @@ import { LabelTemplate } from './LabelTemplate.js'
 import { ShiftTemplate } from './ShiftTemplate.js'
 
 export class PrintService {
+  /** 门店打印信息在 localStorage 中的键名 */
+  static STORAGE_KEY = 'pos_store_info'
+
   /**
    * 打印门店信息（可通过设置页覆盖）
-   * @type {{ storeName: string, storeAddress: string, phone: string, paperWidth: number }}
+   * @type {{ storeName: string, storeAddress: string, phone: string, receiptHeader: string, slogan: string, paperWidth: number }}
    */
   static storeInfo = {
     storeName: '鲜衡生鲜超市',
     storeAddress: '演示门店 · 生鲜区',
     phone: '0000-0000000',
+    receiptHeader: '',
+    slogan: '多谢惠顾，欢迎再次光临！',
     paperWidth: 58,
+  }
+
+  /**
+   * 从 localStorage 加载门店打印信息（配置损坏时保留默认值）
+   * @returns {object} 当前生效的打印信息
+   */
+  static loadStoreInfo() {
+    try {
+      const raw = localStorage.getItem(this.STORAGE_KEY)
+      if (!raw) return this.storeInfo
+      const data = JSON.parse(raw)
+      Object.keys(this.storeInfo).forEach((key) => {
+        if (data[key] !== undefined && data[key] !== null && data[key] !== '') {
+          this.storeInfo[key] = data[key]
+        }
+      })
+    } catch {
+      // 配置损坏时忽略，继续使用默认值
+    }
+    return this.storeInfo
+  }
+
+  /**
+   * 保存门店打印信息到 localStorage 并立即生效
+   * @param {object} info 门店信息（仅合并传入字段）
+   * @returns {object} 当前生效的打印信息
+   */
+  static saveStoreInfo(info) {
+    Object.assign(this.storeInfo, info)
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.storeInfo))
+    return this.storeInfo
   }
 
   /**
@@ -53,6 +89,7 @@ export class PrintService {
    * @returns {void}
    */
   static printReceipt(order) {
+    this.loadStoreInfo()
     const template = new ReceiptTemplate()
     this.print(template.build(order, this.storeInfo))
   }
@@ -64,6 +101,7 @@ export class PrintService {
    * @returns {void}
    */
   static printLabel(order, item) {
+    this.loadStoreInfo()
     const template = new LabelTemplate()
     this.print(template.build(order, item, this.storeInfo))
   }
@@ -75,6 +113,7 @@ export class PrintService {
    * @returns {number} 实际打印的标签数量
    */
   static printLabels(order, items) {
+    this.loadStoreInfo()
     const list = (items || order.items || []).filter((i) => i.weighted)
     if (!list.length) return 0
     const template = new LabelTemplate()
@@ -88,6 +127,7 @@ export class PrintService {
    * @returns {void}
    */
   static printShift(data) {
+    this.loadStoreInfo()
     const template = new ShiftTemplate()
     this.print(template.build(data, this.storeInfo))
   }

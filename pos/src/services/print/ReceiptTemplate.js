@@ -23,6 +23,8 @@ export class ReceiptTemplate {
    * @param {string} [options.storeName] 门店名称
    * @param {string} [options.storeAddress] 门店地址
    * @param {string} [options.phone] 联系电话
+   * @param {string} [options.receiptHeader] 小票抬头（抬头行下方展示）
+   * @param {string} [options.slogan] 广告语（小票页脚展示）
    * @returns {string} 可打印的完整 HTML
    */
   build(order, options = {}) {
@@ -30,6 +32,8 @@ export class ReceiptTemplate {
     const storeName = options.storeName || '鲜衡生鲜超市'
     const storeAddress = options.storeAddress || '演示门店 · 生鲜区'
     const phone = options.phone || ''
+    const receiptHeader = options.receiptHeader || ''
+    const slogan = options.slogan || '多谢惠顾，欢迎再次光临！'
     const discount = Number(order.discount) || 0
     const total = Number(order.totalAmount) || 0
     const payable = Math.max(0, total - discount)
@@ -90,6 +94,7 @@ export class ReceiptTemplate {
   <div class="center">
     <div class="store-name">${F.escape(storeName)}</div>
     <div class="store-sub">${F.escape(storeAddress)}${phone ? ` · ${F.escape(phone)}` : ''}</div>
+    ${receiptHeader ? `<div class="store-sub">${F.escape(receiptHeader)}</div>` : ''}
   </div>
 
   <div class="divider"></div>
@@ -117,7 +122,7 @@ export class ReceiptTemplate {
   <div class="divider"></div>
   <div class="barcode">${this.barcode(order.orderNo)}</div>
   <div class="code-text">${F.escape(order.orderNo)}</div>
-  <div class="footer">多谢惠顾，欢迎再次光临！</div>
+  <div class="footer">${F.escape(slogan)}</div>
 </body>
 </html>`
   }
