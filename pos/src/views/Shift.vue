@@ -94,6 +94,7 @@
 import { reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Printer, Switch } from '@element-plus/icons-vue'
+import { PrintService } from '../services/print/PrintService'
 
 // 当前班次信息（模拟数据）
 const shift = reactive({
@@ -130,9 +131,26 @@ const doHandover = () => {
     .catch(() => {})
 }
 
-// 打印交接小票（示意）
+// 打印交接小票：组装本班汇总数据后调用打印通道
 const printSummary = () => {
-  ElMessage.success('打印交接小票成功（示意）')
+  const payments = [
+    { method: '现金', amount: summary.cash, count: 0 },
+    { method: '微信', amount: summary.wechat, count: 0 },
+    { method: '支付宝', amount: summary.alipay, count: 0 },
+    { method: '储值', amount: summary.storedValue, count: 0 },
+  ]
+  PrintService.printShift({
+    cashierName: shift.cashier,
+    shiftName: '早班',
+    startTime: shift.startTime,
+    endTime: new Date(),
+    orderCount: summary.orderCount,
+    totalAmount: summary.salesAmount,
+    payments,
+    openingCash: 500,
+    cashShould: 500 + payments[0].amount,
+  })
+  ElMessage.success('已发送交班汇总单到打印机')
 }
 </script>
 
