@@ -56,6 +56,16 @@ export class TauriPrintService {
   }
 
   /**
+   * 判断系统打印机是否仍然存在
+   * @param {string} printerName 系统打印机名称
+   * @returns {Promise<boolean>} 存在时为 true；枚举失败时抛出错误
+   */
+  static async hasPrinter(printerName) {
+    const list = await this.invoke('list_printers')
+    return Array.isArray(list) && list.includes(printerName)
+  }
+
+  /**
    * 原生直连打印小票（ESC/POS）
    * @param {string} printerName 系统打印机名称
    * @param {object} job 小票打印任务（字段与 Rust ReceiptJob 对应）
