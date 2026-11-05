@@ -18,6 +18,10 @@ serde_json = "1"
 # 串口通信（连接电子秤）
 serialport = "4"
 
+# Windows 原生打印（打印队列原始指令 + GBK 编码）
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Graphics_Printing", "Win32_Globalization"] }
+
 [profile.release]
 codegen-units = 1
 lto = true

@@ -1,6 +1,6 @@
-//! 鲜衡 POS Tauri 应用入口：注册称重命令与状态管理。
+//! 鲜衡 POS Tauri 应用入口：注册称重与原生打印命令。
 //!
-//! 前端通过 `@tauri-apps/api` 的 invoke 调用以下命令完成电子秤接入。
+//! 前端通过 Tauri invoke 调用以下命令完成电子秤接入与打印机直连出票。
 
 use std::sync::Mutex;
 
@@ -8,6 +8,7 @@ use tauri::State;
 
 use crate::scale::{ScaleConnection, ScaleFactory, WeighScale};
 
+mod print;
 mod scale;
 
 /// 全局应用状态：持有当前电子秤实例（跨线程共享，需 Send）
@@ -67,7 +68,52 @@ fn scale_connected(state: State<'_, ScaleState>) -> Result<bool, String> {
     Ok(scale.is_connected())
 }
 
-/// 应用入口：启动 Tauri 并注册称重命令
+/// 列出本机可用打印机命令
+#[tauri::command]
+fn list_printers() -> Result<Vec<String>, String> {
+    crate::print::list_printers()
+}
+
+/// 原生直连打印小票命令（ESC/POS）
+///
+/// # 参数
+/// - printer_name：系统打印机名称
+/// - job：小票打印任务
+#[tauri::command]
+fn native_print_receipt(
+    printer_name: String,
+    job: crate::print::ReceiptJob,
+) -> Result<(), String> {
+    let data = crate::print::EscPosBuilder::build(&job)?;
+    crate::print::print_raw(&printer_name, &data)
+}
+
+/// 原生直连打印称重标签命令（TSPL）
+///
+/// # 参数
+/// - printer_name：系统打印机名称
+/// - job：标签打印任务
+///
+/// # 返回
+/// - 实际打印的标签张数
+#[tauri::command]
+fn native_print_labels(
+    printer_name: String,
+    job: crate::print::LabelJob,
+) -> Result<u32, String> {
+    let count = job.labels.len() as u32;
+    let data = crate::print::TsplBuilder::build(&job)?;
+    crate::print::print_raw(&printer_name, &data)?;
+    Ok(count)
+}
+
+/// 查询当前平台是否支持原生直连打印
+#[tauri::command]
+fn native_print_supported() -> bool {
+    cfg!(target_os = "windows")
+}
+
+/// 应用入口：启动 Tauri 并注册称重与打印命令
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 初始状态使用模拟秤（无硬件时可正常开发调试）
@@ -79,7 +125,11 @@ pub fn run() {
             read_scale_weight,
             scale_tare,
             scale_zero,
-            scale_connected
+            scale_connected,
+            list_printers,
+            native_print_receipt,
+            native_print_labels,
+            native_print_supported
         ])
         .run(tauri::generate_context!())
         .expect("运行 Tauri 应用失败");
