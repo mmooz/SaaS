@@ -51,3 +51,30 @@ export function uploadOrder(order) {
 export function fetchHealth() {
   return request('/api/health')
 }
+
+/**
+ * 分页查询订单列表
+ * @param {object} [params] 查询参数
+ * @param {string} [params.start] 开始时间（ISO）
+ * @param {string} [params.end] 结束时间（ISO）
+ * @param {string} [params.status] 订单状态
+ * @param {number} [params.page] 页码
+ * @param {number} [params.pageSize] 每页条数
+ * @returns {Promise<{total:number,page:number,page_size:number,items:Array}>}
+ */
+export function fetchOrders({ start, end, status, page = 1, pageSize = 20 } = {}) {
+  const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (start) query.set('start', start)
+  if (end) query.set('end', end)
+  if (status) query.set('status', status)
+  return request(`/api/orders?${query.toString()}`)
+}
+
+/**
+ * 按订单号查询订单详情（补打小票/标签用）
+ * @param {string} orderNo 订单号
+ * @returns {Promise<object>} 订单详情（含明细）
+ */
+export function fetchOrderByNo(orderNo) {
+  return request(`/api/orders/${encodeURIComponent(orderNo)}`)
+}

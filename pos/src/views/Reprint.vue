@@ -85,80 +85,70 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Printer, Search, PriceTag } from '@element-plus/icons-vue'
+import { fetchOrderByNo, fetchOrders } from '../api'
+import { PrintService } from '../services/print/PrintService'
+import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
+import { PrintFormatter as F } from '../services/print/PrintFormatter'
 
 const activeTab = ref('receipt') // 当前 tab
+const loading = ref(false)
 
-// 订单列表（模拟数据；item.weight 存在表示为称重商品）
-const receipts = [
-  {
-    orderNo: 'XS20261105-0001',
-    time: '2026-11-05 09:32',
-    mobile: '13800001234',
-    amount: 87.14,
-    items: [
-      { name: '上海青', weight: '0.62', price: 4.8, amount: 2.98 },
-      { name: '五花肉', weight: '1.35', price: 28.8, amount: 38.88 },
-      { name: '红富士苹果', weight: '1.10', price: 9.8, amount: 10.78 },
-      { name: '鲜鸡蛋(盒)', qty: 2, price: 13.8, amount: 27.6 },
-      { name: '挂面(袋)', qty: 1, price: 6.9, amount: 6.9 },
-    ],
-  },
-  {
-    orderNo: 'XS20261105-0002',
-    time: '2026-11-05 10:15',
-    mobile: '13900005678',
-    amount: 36.31,
-    items: [
-      { name: '草鱼', weight: '1.20', price: 15.8, amount: 18.96 },
-      { name: '黄瓜', weight: '0.85', price: 5.2, amount: 4.42 },
-      { name: '土豆', weight: '2.10', price: 3.8, amount: 7.98 },
-      { name: '东北大米', weight: '0.90', price: 5.5, amount: 4.95 },
-    ],
-  },
-  {
-    orderNo: 'XS20261105-0003',
-    time: '2026-11-05 11:02',
-    mobile: '13700001122',
-    amount: 47.96,
-    items: [
-      { name: '基围虾', weight: '0.50', price: 42.0, amount: 21.0 },
-      { name: '鸡胸肉', weight: '0.80', price: 21.5, amount: 17.2 },
-      { name: '西红柿', weight: '0.65', price: 6.5, amount: 4.23 },
-      { name: '蜜桔', weight: '0.70', price: 7.9, amount: 5.53 },
-    ],
-  },
-  {
-    orderNo: 'XS20261105-0004',
-    time: '2026-11-05 14:28',
-    mobile: '13600009900',
-    amount: 93.26,
-    items: [
-      { name: '金龙鱼花生油', qty: 1, price: 89.9, amount: 89.9 },
-      { name: '香蕉', weight: '0.60', price: 5.6, amount: 3.36 },
-    ],
-  },
-  {
-    orderNo: 'XS20261105-0005',
-    time: '2026-11-05 15:02',
-    mobile: '13500007788',
-    amount: 48.3,
-    items: [
-      { name: '鲜鸡蛋(盒)', qty: 2, price: 13.8, amount: 27.6 },
-      { name: '挂面(袋)', qty: 3, price: 6.9, amount: 20.7 },
-    ],
-  },
-]
+// 订单列表（来自服务端）
+const receipts = ref([])
+
+/**
+ * 服务端订单转页面展示模型
+ * @param {object} order 服务端订单（OrderOut）
+ * @returns {object} 展示模型
+ */
+function toDisplay(order) {
+  return {
+    orderNo: order.order_no,
+    time: F.datetime(order.created_at),
+    mobile: order.member_id ? `会员#${order.member_id}` : '',
+    amount: order.total_amount,
+    payMethod: OrderPrintMapper.payMethod(order.pay_details),
+    items: (order.items || []).map((item) => ({
+      productId: item.product_id,
+      name: item.name,
+      weighted: !!item.is_weighted,
+      weight: item.is_weighted ? Number(item.weight_kg || 0).toFixed(2) : '',
+      qty: item.qty,
+      price: item.unit_price,
+      amount: item.amount,
+    })),
+    printModel: OrderPrintMapper.fromServer(order),
+  }
+}
+
+/**
+ * 加载最近的订单列表
+ * @returns {Promise<void>}
+ */
+async function loadOrders() {
+  loading.value = true
+  try {
+    const data = await fetchOrders({ page: 1, pageSize: 20 })
+    receipts.value = (data.items || []).map(toDisplay)
+  } catch (err) {
+    ElMessage.error(`订单加载失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(loadOrders)
 
 // 补打小票查询条件
 const receiptKeyword = ref('')
 const receiptDate = ref('')
 
-// 小票过滤：按订单号 / 手机号 / 日期
+// 小票过滤：按订单号 / 会员 / 日期
 const filteredReceipts = computed(() =>
-  receipts.filter((o) => {
+  receipts.value.filter((o) => {
     const kw = receiptKeyword.value.trim().toLowerCase()
     const inKw = !kw || o.orderNo.toLowerCase().includes(kw) || o.mobile.includes(kw)
     const inDate = !receiptDate.value || o.time.startsWith(receiptDate.value)
@@ -166,14 +156,26 @@ const filteredReceipts = computed(() =>
   }),
 )
 
-// 点击查询（过滤由 computed 自动完成，此处仅做提示）
-const searchReceipt = () => {
-  ElMessage.info('已按条件查询（演示）')
+// 查询：关键字像订单号时精确查询，否则重新拉取列表
+const searchReceipt = async () => {
+  const kw = receiptKeyword.value.trim()
+  if (kw && /\d{4}-\d{5}$/.test(kw) === false && /\d$/.test(kw) && kw.length >= 8) {
+    try {
+      const order = await fetchOrderByNo(kw)
+      receipts.value = [toDisplay(order), ...receipts.value.filter((o) => o.orderNo !== order.order_no)]
+      ElMessage.success('已定位订单')
+      return
+    } catch {
+      // 精确查询失败则退回列表查询
+    }
+  }
+  await loadOrders()
+  ElMessage.info(`已查询 ${receipts.value.length} 笔订单`)
 }
 
 // 补打价格标签：仅含称重商品的订单
 const labelOrders = computed(() =>
-  receipts.filter((o) => o.items.some((i) => i.weight)),
+  receipts.value.filter((o) => o.items.some((i) => i.weighted)),
 )
 
 const labelOrderNo = ref('') // 选中的标签订单号
@@ -183,19 +185,25 @@ const currentLabelOrder = computed(() =>
   labelOrders.value.find((o) => o.orderNo === labelOrderNo.value),
 )
 
-// 补打小票（示意）
+// 补打小票：调用打印通道重新出票
 const reprintReceipt = (row) => {
-  ElMessage.success(`补打小票成功：${row.orderNo}（示意）`)
+  PrintService.printReceipt(row.printModel)
+  ElMessage.success(`已补打小票：${row.orderNo}`)
 }
 
-// 补打单个价格标签（示意）
+// 补打单个价格标签
 const reprintLabel = (item) => {
-  ElMessage.success(`已补打标签：${item.name}（示意）`)
+  PrintService.printLabel(currentLabelOrder.value.printModel, item)
+  ElMessage.success(`已补打标签：${item.name}`)
 }
 
-// 补打全部价格标签（示意）
+// 补打全部价格标签
 const reprintLabelAll = () => {
-  ElMessage.success(`已补打 ${currentLabelOrder.value.items.length} 张价格标签（示意）`)
+  const count = PrintService.printLabels(
+    currentLabelOrder.value.printModel,
+    currentLabelOrder.value.printModel.items,
+  )
+  ElMessage.success(`已补打 ${count} 张价格标签`)
 }
 </script>
 
