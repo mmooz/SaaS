@@ -131,13 +131,25 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
+import {
+  createPromotion,
+  deletePromotion,
+  fetchCategories,
+  fetchProducts,
+  fetchPromotions,
+  updatePromotion,
+} from '../api'
+
+// 后端类型与页面文案映射
+const TYPE_TO_TEXT = { special: '限时特价', discount: '折扣', full_reduce: '满减' }
+const TEXT_TO_TYPE = { 限时特价: 'special', 折扣: 'discount', 满减: 'full_reduce' }
 
 // 当前筛选 tab（全部 / 限时特价 / 折扣 / 满减）
 const filterTab = ref('all')
-// 列表加载态（示意）
+// 列表加载态
 const loading = ref(false)
 // 弹窗显隐
 const dialogVisible = ref(false)
@@ -145,49 +157,106 @@ const dialogVisible = ref(false)
 // 促销类型对应的标签类型：限时特价橙 / 折扣主绿 / 满减成功绿
 const typeTag = (t) => (t === '限时特价' ? 'warning' : t === '折扣' ? 'primary' : 'success')
 
-// 模拟数据：促销列表
-const promos = ref([
-  { id: 1, name: '晚间蔬菜特价', type: '限时特价', scope: '蔬菜分类 12 个商品', benefit: '¥2.98/斤', start: '2026-11-01 18:00', end: '2026-11-30 21:00', enabled: true },
-  { id: 2, name: '会员全场 9 折', type: '折扣', scope: '全场商品', benefit: '9 折', start: '2026-10-01 00:00', end: '2026-12-31 23:59', enabled: true },
-  { id: 3, name: '满 50 减 5', type: '满减', scope: '全场商品', benefit: '满 ¥50 减 ¥5', start: '2026-11-01 00:00', end: '2026-11-30 23:59', enabled: true },
-  { id: 4, name: '周末水果特价', type: '限时特价', scope: '水果分类 8 个商品', benefit: '¥6.99/斤', start: '2026-11-07 09:00', end: '2026-11-08 22:00', enabled: true },
-  { id: 5, name: '肉品满 80 减 10', type: '满减', scope: '肉类分类商品', benefit: '满 ¥80 减 ¥10', start: '2026-11-01 00:00', end: '2026-11-15 23:59', enabled: false },
-  { id: 6, name: '新人首单 8.8 折', type: '折扣', scope: '新注册会员', benefit: '8.8 折', start: '2026-09-01 00:00', end: '2026-11-30 23:59', enabled: true },
-  { id: 7, name: '早餐蛋奶特价', type: '限时特价', scope: '蛋奶分类 6 个商品', benefit: '¥0.98/枚', start: '2026-11-10 06:00', end: '2026-11-20 10:00', enabled: false },
-])
+// 促销列表（来自后端，已转换为展示模型）
+const promos = ref([])
+
+/**
+ * 时间格式化（后端 ISO 时间 → YYYY-MM-DD HH:mm）
+ * @param {string|null} value ISO 时间
+ * @returns {string} 展示时间
+ */
+function fmtTime(value) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+/**
+ * 后端促销转列表展示模型
+ * @param {object} promo 后端促销
+ * @returns {object} 展示数据
+ */
+function toRow(promo) {
+  const params = promo.params || {}
+  // 优惠内容文案
+  const benefit =
+    promo.type === 'special'
+      ? `¥${Number(params.price || 0).toFixed(2)}`
+      : promo.type === 'discount'
+        ? `${(Number(params.rate || 0) * 10).toFixed(1)} 折`
+        : `满 ¥${params.threshold || 0} 减 ¥${params.reduce || 0}`
+  // 适用范围文案
+  const scope = promo.product_ids?.length
+    ? `${promo.product_ids.length} 个指定商品`
+    : promo.category_ids?.length
+      ? `${promo.category_ids.length} 个指定分类`
+      : '全场商品'
+  return {
+    id: promo.id,
+    name: promo.name,
+    type: TYPE_TO_TEXT[promo.type] || promo.type,
+    scope,
+    benefit,
+    start: fmtTime(promo.start_at),
+    end: fmtTime(promo.end_at),
+    enabled: promo.enabled,
+    raw: promo,
+  }
+}
+
+/**
+ * 加载促销列表
+ * @returns {Promise<void>}
+ */
+async function loadPromos() {
+  loading.value = true
+  try {
+    const rows = await fetchPromotions()
+    promos.value = rows.map(toRow)
+  } catch (err) {
+    ElMessage.error(`促销加载失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
+}
 
 // 按 tab 过滤后的促销列表
 const filteredPromos = computed(() =>
-  filterTab.value === 'all' ? promos.value : promos.value.filter((p) => p.type === filterTab.value)
+  filterTab.value === 'all' ? promos.value : promos.value.filter((p) => p.type === filterTab.value),
 )
 
-// 商品分组（供弹窗多选使用，模拟数据）
-const productGroups = [
-  {
-    label: '蔬菜',
-    options: [
-      { value: '上海青', label: '上海青' },
-      { value: '西红柿', label: '西红柿' },
-      { value: '黄瓜', label: '黄瓜' },
-      { value: '土豆', label: '土豆' },
-    ],
-  },
-  {
-    label: '水果',
-    options: [
-      { value: '蜜桔', label: '蜜桔' },
-      { value: '香蕉', label: '香蕉' },
-      { value: '苹果', label: '苹果' },
-    ],
-  },
-  {
-    label: '肉类',
-    options: [
-      { value: '五花肉', label: '五花肉' },
-      { value: '前腿肉', label: '前腿肉' },
-    ],
-  },
-]
+// 商品分组（供弹窗多选使用，来自后端商品与分类）
+const productGroups = ref([])
+
+/**
+ * 加载商品选项并按分类分组
+ * @returns {Promise<void>}
+ */
+async function loadProductGroups() {
+  try {
+    const [products, tree] = await Promise.all([fetchProducts(), fetchCategories()])
+    // 扁平化分类树，得到 ID → 名称
+    const cateMap = {}
+    const walk = (nodes) => nodes.forEach((n) => {
+      cateMap[n.id] = n.name
+      if (n.children?.length) walk(n.children)
+    })
+    walk(tree || [])
+    const groups = new Map()
+    for (const p of products.items || []) {
+      const label = cateMap[p.category_id] || '其他'
+      if (!groups.has(label)) groups.set(label, [])
+      groups.get(label).push({ value: p.id, label: p.name })
+    }
+    productGroups.value = [...groups.entries()].map(([label, options]) => ({ label, options }))
+  } catch (err) {
+    ElMessage.error(`商品选项加载失败：${err.message}`)
+  }
+}
+
+onMounted(() => {
+  loadPromos()
+  loadProductGroups()
+})
 
 // 弹窗表单（新增 / 编辑共用）
 const formRef = ref(null)
@@ -204,26 +273,26 @@ const form = reactive({
   enabled: true,
 })
 
-// 表单校验规则
+// 表单校验规则（适用商品可留空表示全场）
 const formRules = {
   name: [{ required: true, message: '请输入促销名称', trigger: 'blur' }],
-  products: [{ required: true, type: 'array', min: 1, message: '请选择适用商品', trigger: 'change' }],
-  timeRange: [{ required: true, type: 'array', min: 2, message: '请选择生效时间段', trigger: 'change' }],
 }
 
 // 打开弹窗：无 row 为新增，有 row 为编辑回填
 const openDialog = (row) => {
   if (row) {
+    const raw = row.raw || {}
+    const params = raw.params || {}
     Object.assign(form, {
       id: row.id,
       type: row.type,
       name: row.name,
-      products: row.scope === '全场商品' ? [] : [],
-      price: row.type === '限时特价' ? Number(row.benefit.replace(/[¥斤]/g, '')) : 2.98,
-      discount: row.type === '折扣' ? Number(row.benefit.replace(/折/g, '')) : 9,
-      full: row.type === '满减' ? Number(row.benefit.match(/满\s*¥?(\d+)/)?.[1] ?? 50) : 50,
-      reduce: row.type === '满减' ? Number(row.benefit.match(/减\s*¥?(\d+)/)?.[1] ?? 5) : 5,
-      timeRange: [row.start, row.end],
+      products: raw.product_ids || [],
+      price: row.type === '限时特价' ? Number(params.price || 2.98) : 2.98,
+      discount: row.type === '折扣' ? Number(params.rate || 0.9) * 10 : 9,
+      full: row.type === '满减' ? Number(params.threshold || 50) : 50,
+      reduce: row.type === '满减' ? Number(params.reduce || 5) : 5,
+      timeRange: raw.start_at && raw.end_at ? [fmtTime(raw.start_at), fmtTime(raw.end_at)] : [],
       enabled: row.enabled,
     })
   } else {
@@ -236,55 +305,79 @@ const openDialog = (row) => {
   dialogVisible.value = true
 }
 
-// 保存促销（校验通过后写入列表，示意）
-const savePromo = async () => {
-  await formRef.value.validate()
-  const timeRange = form.timeRange || []
-  const benefit = form.type === '限时特价'
-    ? `¥${form.price.toFixed(2)}/斤`
-    : form.type === '折扣'
-      ? `${form.discount} 折`
-      : `满 ¥${form.full} 减 ¥${form.reduce}`
-  const scope = form.products.length ? `${form.products.join('、')} 等 ${form.products.length} 个商品` : '全场商品'
-  if (form.id) {
-    // 编辑：更新已有行
-    const row = promos.value.find((p) => p.id === form.id)
-    Object.assign(row, { name: form.name, benefit, scope, start: timeRange[0], end: timeRange[1], enabled: form.enabled })
-    ElMessage.success('促销已更新')
-  } else {
-    // 新增：插入列表头部
-    promos.value.unshift({
-      id: Date.now(),
-      name: form.name,
-      type: form.type,
-      scope,
-      benefit,
-      start: timeRange[0],
-      end: timeRange[1],
-      enabled: form.enabled,
-    })
-    ElMessage.success('促销已创建')
+/**
+ * 表单转后端请求体
+ * @returns {object} 促销请求数据
+ */
+function buildPayload() {
+  const type = TEXT_TO_TYPE[form.type]
+  const params =
+    type === 'special'
+      ? { price: form.price }
+      : type === 'discount'
+        ? { rate: +(form.discount / 10).toFixed(2) }
+        : { threshold: form.full, reduce: form.reduce }
+  const [start, end] = form.timeRange || []
+  return {
+    type,
+    name: form.name,
+    product_ids: form.products.length ? form.products : null,
+    params,
+    // 统一转为 ISO 格式（后端按 datetime 解析）
+    start_at: start ? `${start.replace(' ', 'T')}:00` : null,
+    end_at: end ? `${end.replace(' ', 'T')}:00` : null,
+    enabled: form.enabled,
   }
-  dialogVisible.value = false
+}
+
+// 保存促销（调用后端新增或更新）
+const savePromo = async () => {
+  try {
+    await formRef.value.validate()
+  } catch {
+    return
+  }
+  const payload = buildPayload()
+  try {
+    if (form.id) {
+      await updatePromotion(form.id, payload)
+      ElMessage.success('促销已更新')
+    } else {
+      await createPromotion(payload)
+      ElMessage.success('促销已创建')
+    }
+    dialogVisible.value = false
+    await loadPromos()
+  } catch (err) {
+    ElMessage.error(`保存失败：${err.message}`)
+  }
 }
 
 // 切换启用 / 停用
-const toggleStatus = (row, val) => {
-  row.enabled = val
-  ElMessage.success(`已${val ? '启用' : '停用'}「${row.name}」`)
+const toggleStatus = async (row, val) => {
+  try {
+    await updatePromotion(row.id, { enabled: val })
+    row.enabled = val
+    ElMessage.success(`已${val ? '启用' : '停用'}「${row.name}」`)
+  } catch (err) {
+    ElMessage.error(`操作失败：${err.message}`)
+    await loadPromos()
+  }
 }
 
 // 删除促销
-const removePromo = (row) => {
-  promos.value = promos.value.filter((p) => p.id !== row.id)
-  ElMessage.success(`已删除「${row.name}」`)
+const removePromo = async (row) => {
+  try {
+    await deletePromotion(row.id)
+    promos.value = promos.value.filter((p) => p.id !== row.id)
+    ElMessage.success(`已删除「${row.name}」`)
+  } catch (err) {
+    ElMessage.error(`删除失败：${err.message}`)
+  }
 }
 
-// tab 切换（示意加载）
-const handleFilter = () => {
-  loading.value = true
-  setTimeout(() => (loading.value = false), 300)
-}
+// tab 切换（客户端过滤，无需请求）
+const handleFilter = () => {}
 </script>
 
 <style scoped>
