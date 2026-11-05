@@ -182,30 +182,3 @@ class TenantService:
         db.commit()
         db.refresh(tenant)
         return tenant
-
-    @staticmethod
-    def delete(db: Session, tenant: Tenant) -> None:
-        """删除租户：存在门店或用户时拒绝，避免产生孤儿数据。
-
-        :param db: 数据库会话
-        :param tenant: 待删除的租户 ORM 对象
-        :return: 无返回值，校验失败抛 ValueError
-        """
-        if tenant.code == PLATFORM_TENANT_CODE:
-            raise ValueError("平台租户不允许删除")
-        store_count = int(
-            db.scalar(
-                select(func.count()).select_from(Store).where(Store.tenant_id == tenant.id)
-            )
-            or 0
-        )
-        user_count = int(
-            db.scalar(
-                select(func.count()).select_from(User).where(User.tenant_id == tenant.id)
-            )
-            or 0
-        )
-        if store_count or user_count:
-            raise ValueError("租户下存在门店或用户，请先清理后再删除")
-        db.delete(tenant)
-        db.commit()

@@ -99,22 +99,6 @@ def update_tenant(
         raise _to_error(exc) from exc
 
 
-@router.delete("/{tenant_id}", status_code=204)
-def delete_tenant(
-    tenant_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_super_admin),
-):
-    """删除租户（仅平台超级管理员；租户下存在门店或用户时拒绝删除）。"""
-    tenant = db.get(Tenant, tenant_id)
-    if not tenant:
-        raise HTTPException(status_code=404, detail="租户不存在")
-    try:
-        TenantService.delete(db, tenant)
-    except ValueError as exc:
-        raise _to_error(exc) from exc
-
-
 @router.get("/check-code/{code}", response_model=dict)
 def check_code(
     code: str,
