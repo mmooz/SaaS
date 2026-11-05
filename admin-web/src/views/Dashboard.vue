@@ -1,36 +1,36 @@
 <template>
   <div class="dashboard">
     <!-- 顶部统计卡片 -->
-    <div class="stat-grid">
+    <div class="stat-grid" v-loading="loading">
       <div class="stat-card">
         <div class="stat-icon" style="--c: var(--brand)"><el-icon :size="22"><Money /></el-icon></div>
         <div>
           <div class="stat-label">今日销售额</div>
-          <div class="stat-value num">¥ 12,684.50</div>
-          <div class="stat-trend up">较昨日 +8.2%</div>
+          <div class="stat-value num">¥ {{ today.sales.toFixed(2) }}</div>
+          <div class="stat-trend" :class="{ up: salesCompare.up }">{{ salesCompare.text }}</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon" style="--c: var(--info)"><el-icon :size="22"><Tickets /></el-icon></div>
         <div>
           <div class="stat-label">今日订单数</div>
-          <div class="stat-value num">236</div>
-          <div class="stat-trend up">较昨日 +12</div>
+          <div class="stat-value num">{{ today.orders }}</div>
+          <div class="stat-trend" :class="{ up: orderCompare.up }">{{ orderCompare.text }}</div>
         </div>
       </div>
       <div class="stat-card">
         <div class="stat-icon" style="--c: var(--accent)"><el-icon :size="22"><ScaleToOriginal /></el-icon></div>
         <div>
           <div class="stat-label">今日称重单数</div>
-          <div class="stat-value num">178</div>
-          <div class="stat-trend">占比 75.4%</div>
+          <div class="stat-value num">{{ today.weighted_orders }}</div>
+          <div class="stat-trend">占比 {{ weightedRatio }}%</div>
         </div>
       </div>
       <div class="stat-card warn">
         <div class="stat-icon" style="--c: var(--danger)"><el-icon :size="22"><Warning /></el-icon></div>
         <div>
           <div class="stat-label">低库存预警</div>
-          <div class="stat-value num">6</div>
+          <div class="stat-value num">{{ alertTotal }}</div>
           <div class="stat-trend danger">需尽快补货</div>
         </div>
       </div>
@@ -64,21 +64,24 @@
           <el-button link type="primary" size="small" @click="$router.push('/inventory')">去补货 →</el-button>
         </div>
         <div class="warn-list">
-          <div v-for="w in warnings" :key="w.name" class="warn-item">
+          <div v-for="w in warnings" :key="w.product_id" class="warn-item">
             <div class="warn-info">
               <span class="warn-name">{{ w.name }}</span>
-              <span class="warn-amount num">剩 {{ w.stock }}{{ w.unit }} / 安全 {{ w.safety }}</span>
+              <span class="warn-amount num">剩 {{ w.stock }}{{ w.unit }} / 安全 {{ w.safety_stock }}</span>
             </div>
-            <el-tag size="small" type="danger" effect="light">库存不足</el-tag>
+            <el-tag size="small" :type="w.status === 'out' ? 'danger' : 'warning'" effect="light">
+              {{ w.status === 'out' ? '已售罄' : '库存不足' }}
+            </el-tag>
           </div>
+          <div v-if="!warnings.length && !loading" class="warn-empty">暂无库存预警</div>
         </div>
       </div>
       <div class="chart-card span-2">
         <div class="card-head">
           <h3>最近订单</h3>
-          <el-button link type="primary" size="small">查看全部 →</el-button>
+          <el-button link type="primary" size="small" @click="$router.push('/reports')">查看全部 →</el-button>
         </div>
-        <el-table :data="recentOrders" size="small" class="order-table">
+        <el-table :data="recentOrders" size="small" class="order-table" empty-text="暂无订单">
           <el-table-column prop="orderNo" label="单号" width="150" />
           <el-table-column prop="items" label="商品" min-width="180">
             <template #default="{ row }">{{ row.items }}</template>
@@ -101,104 +104,278 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import * as echarts from 'echarts'
+import { ElMessage } from 'element-plus'
 import { Money, Tickets, ScaleToOriginal, Warning } from '@element-plus/icons-vue'
+import { fetchDailyReport, fetchInventoryAlerts, fetchOrders, fetchProfitReport } from '../api'
 
+// 图表颜色（与报表中心保持一致）
+const COLORS = { green: '#2F9E5F', orange: '#F5A623', blue: '#4A90D9', red: '#E05B4D' }
+// 分类饼图配色
+const PIE_COLORS = ['#2F9E5F', '#F5A623', '#E05B4D', '#4A90D9', '#8A8F3B', '#9B59B6', '#16A085']
+
+// 趋势图容器
 const trendRef = ref(null)
+// 分类饼图容器
 const cateRef = ref(null)
+// 趋势区间：7 或 30 天
 const trendRange = ref('7')
+// 页面加载状态
+const loading = ref(false)
 
-// 模拟数据：低库存预警列表
-const warnings = [
-  { name: '上海青', stock: '2.4', safety: '10', unit: 'kg' },
-  { name: '西红柿', stock: '5.0', safety: '15', unit: 'kg' },
-  { name: '鲜鸡蛋(盒)', stock: '8', safety: '30', unit: '盒' },
-  { name: '土豆', stock: '12', safety: '40', unit: 'kg' },
-  { name: '蜜桔', stock: '6.5', safety: '20', unit: 'kg' },
-  { name: '五花肉', stock: '3.2', safety: '8', unit: 'kg' },
-]
+// 今日汇总
+const today = ref({ sales: 0, orders: 0, avg_price: 0, weight_kg: 0, weighted_orders: 0 })
+// 昨日汇总（用于同比）
+const yesterday = ref({ sales: 0, orders: 0 })
+// 低库存预警列表
+const warnings = ref([])
+// 低库存预警总数
+const alertTotal = ref(0)
+// 最近订单列表
+const recentOrders = ref([])
+// 分类销售数据（饼图用）
+const categorySales = ref([])
+// 趋势图数据
+const trendData = ref({ labels: [], values: [] })
 
-// 模拟数据：最近订单
-const recentOrders = [
-  { orderNo: '20261105-0212', items: '上海青 ×0.86kg、五花肉 ×0.42kg', payMethod: '微信', amount: 18.68, time: '18:32' },
-  { orderNo: '20261105-0211', items: '蜜桔 ×2.1kg、香蕉 ×1.2kg', payMethod: '现金', amount: 23.4, time: '18:25' },
-  { orderNo: '20261105-0210', items: '鲜鸡蛋(盒) ×1、土豆 ×1.5kg', payMethod: '储值', amount: 21.9, time: '18:19' },
-  { orderNo: '20261105-0209', items: '西红柿 ×1.8kg、黄瓜 ×1.4kg', payMethod: '支付宝', amount: 19.72, time: '18:11' },
-  { orderNo: '20261105-0208', items: '前腿肉 ×0.6kg、大蒜 ×0.2kg', payMethod: '现金', amount: 22.16, time: '18:04' },
-]
+/**
+ * 数字补零
+ * @param {number} n 数字
+ * @returns {string} 两位字符串
+ */
+const pad = (n) => String(n).padStart(2, '0')
 
-// 支付方式对应的标签类型
-const payTagType = (m) => {
-  if (m === '现金') return 'warning'
-  if (m === '储值') return 'success'
+/**
+ * 以今天为基准偏移若干天，返回 YYYY-MM-DD
+ * @param {number} offset 偏移天数（负数表示过去）
+ * @returns {string} 日期字符串
+ */
+const dateStr = (offset) => {
+  const d = new Date()
+  d.setDate(d.getDate() + offset)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/**
+ * 获取或初始化 ECharts 实例（避免重复初始化）
+ * @param {HTMLElement} el 图表容器
+ * @returns {object} ECharts 实例
+ */
+const getChart = (el) => echarts.getInstanceByDom(el) || echarts.init(el)
+
+// 销售额较昨日变化
+const salesCompare = computed(() => {
+  const prev = yesterday.value.sales
+  const cur = today.value.sales
+  if (!prev) return { text: cur > 0 ? '昨日无销售' : '较昨日 —', up: false }
+  const pct = ((cur - prev) / prev) * 100
+  return { text: `较昨日 ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`, up: pct >= 0 }
+})
+
+// 订单数较昨日变化
+const orderCompare = computed(() => {
+  const diff = today.value.orders - yesterday.value.orders
+  return { text: `较昨日 ${diff >= 0 ? '+' : ''}${diff} 单`, up: diff >= 0 }
+})
+
+// 称重订单占比
+const weightedRatio = computed(() =>
+  today.value.orders ? ((today.value.weighted_orders / today.value.orders) * 100).toFixed(1) : '0.0',
+)
+
+/**
+ * 把日报趋势补齐为连续日期（缺失日期补 0）
+ * @param {Array<{label: string, sales: number}>} points 后端趋势点
+ * @param {number} days 天数
+ * @returns {{labels: string[], values: number[]}} 连续趋势
+ */
+function fillTrend(points, days) {
+  const map = new Map(points.map((p) => [p.label, p.sales]))
+  const labels = []
+  const values = []
+  for (let i = days - 1; i >= 0; i--) {
+    const label = dateStr(-i).slice(5)
+    labels.push(label)
+    values.push(Number(map.get(label) || 0))
+  }
+  return { labels, values }
+}
+
+/**
+ * 解析支付明细为支付方式文本
+ * @param {string|null} raw 支付明细 JSON
+ * @returns {string} 支付方式文本
+ */
+function payMethodText(raw) {
+  try {
+    const parsed = JSON.parse(raw || '{}')
+    const names = Object.entries(parsed)
+      .filter(([, amount]) => Number(amount) > 0)
+      .map(([name]) => name)
+    return names.length ? names.join('+') : '—'
+  } catch {
+    return '—'
+  }
+}
+
+/**
+ * 支付方式对应的标签类型
+ * @param {string} method 支付方式
+ * @returns {string} Element Plus 标签类型
+ */
+function payTagType(method) {
+  if (method === '现金') return 'warning'
+  if (method === '储值') return 'success'
   return 'primary'
 }
 
-onMounted(() => {
-  // 销售趋势图：折线 + 面积
-  const trend = echarts.init(trendRef.value)
-  trend.setOption({
-    tooltip: { trigger: 'axis' },
-    grid: { left: 40, right: 20, top: 30, bottom: 30 },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: ['10-30', '10-31', '11-01', '11-02', '11-03', '11-04', '11-05'],
-      axisLine: { lineStyle: { color: '#c9c9c9' } },
-      axisLabel: { color: '#8a8a8a' },
-    },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#f0f0f0' } },
-      axisLabel: { color: '#8a8a8a' },
-    },
-    series: [
-      {
-        name: '销售额',
-        type: 'line',
-        smooth: true,
-        data: [9280, 10460, 11730, 10280, 13620, 11720, 12684],
-        itemStyle: { color: '#2F9E5F' },
-        lineStyle: { width: 3 },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(47,158,95,0.25)' },
-              { offset: 1, color: 'rgba(47,158,95,0.02)' },
-            ],
+/**
+ * 把后端订单转为首页订单行
+ * @param {object} order 订单数据
+ * @returns {object} 表格行
+ */
+function toOrderRow(order) {
+  const items = (order.items || []).map((it) =>
+    it.is_weighted ? `${it.name} ×${Number(it.weight_kg || 0)}kg` : `${it.name} ×${Number(it.qty || 0)}`,
+  )
+  return {
+    orderNo: order.order_no,
+    items: items.length ? items.join('、') : '—',
+    payMethod: payMethodText(order.pay_details),
+    amount: Number(order.total_amount || 0),
+    time: (order.created_at || '').slice(11, 16),
+  }
+}
+
+/**
+ * 加载首页全部数据并渲染图表
+ */
+async function loadDashboard() {
+  loading.value = true
+  const days = Number(trendRange.value)
+  try {
+    const [dayReport, prevReport, rangeReport, alerts, orders, profit] = await Promise.all([
+      fetchDailyReport({ start: dateStr(0), end: dateStr(0), mode: 'day' }),
+      fetchDailyReport({ start: dateStr(-1), end: dateStr(-1), mode: 'day' }),
+      fetchDailyReport({ start: dateStr(-(days - 1)), end: dateStr(0), mode: 'day' }),
+      fetchInventoryAlerts(),
+      fetchOrders({ page: 1, pageSize: 6 }),
+      fetchProfitReport({ start: dateStr(-(days - 1)), end: dateStr(0) }),
+    ])
+    today.value = dayReport.summary
+    yesterday.value = prevReport.summary
+    warnings.value = (alerts.items || []).slice(0, 6)
+    alertTotal.value = alerts.total ?? warnings.value.length
+    recentOrders.value = (orders.items || []).map(toOrderRow)
+    categorySales.value = profit.categories || []
+    trendData.value = fillTrend(rangeReport.trend || [], days)
+  } catch (err) {
+    ElMessage.error(`首页数据加载失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
+  await nextTick()
+  renderTrend()
+  renderCategory()
+}
+
+/**
+ * 渲染销售趋势折线图
+ */
+function renderTrend() {
+  if (!trendRef.value) return
+  const chart = getChart(trendRef.value)
+  chart.setOption(
+    {
+      tooltip: { trigger: 'axis' },
+      grid: { left: 50, right: 20, top: 30, bottom: 30 },
+      xAxis: {
+        type: 'category',
+        boundaryGap: false,
+        data: trendData.value.labels,
+        axisLine: { lineStyle: { color: '#c9c9c9' } },
+        // 30 天区间强制显示全部日期刻度并倾斜，避免自动隐藏
+        axisLabel: { color: '#8a8a8a', interval: 0, rotate: Number(trendRange.value) > 7 ? 45 : 0 },
+      },
+      yAxis: {
+        type: 'value',
+        splitLine: { lineStyle: { color: '#f0f0f0' } },
+        axisLabel: { color: '#8a8a8a' },
+      },
+      series: [
+        {
+          name: '销售额',
+          type: 'line',
+          smooth: true,
+          data: trendData.value.values,
+          itemStyle: { color: COLORS.green },
+          lineStyle: { width: 3 },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0,
+              y: 0,
+              x2: 0,
+              y2: 1,
+              colorStops: [
+                { offset: 0, color: 'rgba(47,158,95,0.25)' },
+                { offset: 1, color: 'rgba(47,158,95,0.02)' },
+              ],
+            },
           },
         },
-      },
-    ],
-  })
+      ],
+    },
+    true,
+  )
+}
 
-  // 分类占比饼图
-  const cate = echarts.init(cateRef.value)
-  cate.setOption({
-    tooltip: { trigger: 'item', formatter: '{b}: {d}%' },
-    legend: { bottom: 0, icon: 'circle', itemWidth: 8, textStyle: { color: '#555' } },
-    series: [
-      {
-        name: '分类占比',
-        type: 'pie',
-        radius: ['42%', '70%'],
-        center: ['50%', '45%'],
-        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
-        label: { show: false },
-        data: [
-          { value: 32, name: '蔬菜', itemStyle: { color: '#2F9E5F' } },
-          { value: 24, name: '水果', itemStyle: { color: '#F5A623' } },
-          { value: 18, name: '肉类', itemStyle: { color: '#E05B4D' } },
-          { value: 12, name: '水产', itemStyle: { color: '#4A90D9' } },
-          { value: 14, name: '粮油副食', itemStyle: { color: '#8A8F3B' } },
-        ],
+/**
+ * 渲染分类销售占比饼图
+ */
+function renderCategory() {
+  if (!cateRef.value) return
+  const chart = getChart(cateRef.value)
+  // 过滤零销售额分类，避免图例出现空分类
+  const data = categorySales.value
+    .filter((c) => c.sales > 0)
+    .map((c, index) => ({
+      value: c.sales,
+      name: c.category,
+      itemStyle: { color: PIE_COLORS[index % PIE_COLORS.length] },
+    }))
+  chart.setOption(
+    {
+      tooltip: { trigger: 'item', formatter: '{b}: ¥{c} ({d}%)' },
+      legend: { bottom: 0, icon: 'circle', itemWidth: 8, textStyle: { color: '#555' } },
+      title: {
+        show: !data.length,
+        text: '暂无销售数据',
+        left: 'center',
+        top: '45%',
+        textStyle: { color: '#bbb', fontSize: 13, fontWeight: 'normal' },
       },
-    ],
-  })
-})
+      series: [
+        {
+          name: '分类占比',
+          type: 'pie',
+          radius: ['42%', '70%'],
+          center: ['50%', '45%'],
+          itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+          label: { show: false },
+          data,
+        },
+      ],
+    },
+    true,
+  )
+}
+
+// 切换 7 日 / 30 日时重新加载
+watch(trendRange, loadDashboard)
+
+onMounted(loadDashboard)
 </script>
 
 <style scoped>
@@ -290,6 +467,12 @@ onMounted(() => {
 }
 .warn-item:last-child {
   border-bottom: none;
+}
+.warn-empty {
+  padding: 24px 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--neutral-400);
 }
 .warn-name {
   font-size: 13px;

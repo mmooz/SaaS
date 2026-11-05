@@ -248,6 +248,25 @@ export function fetchCategories() {
   return request('/api/categories/tree')
 }
 
+/* ---------------- 订单 ---------------- */
+
+/**
+ * 分页查询订单
+ * @param {object} params { start, end, status, page, pageSize }
+ * @returns {Promise<object>} 订单分页数据
+ */
+export function fetchOrders(params = {}) {
+  return request(
+    `/api/orders${query({
+      start: params.start,
+      end: params.end,
+      status: params.status,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  )
+}
+
 /* ---------------- 报表 ---------------- */
 
 /**
