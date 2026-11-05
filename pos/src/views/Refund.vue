@@ -131,7 +131,9 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Search, WarningFilled } from '@element-plus/icons-vue'
-import { fetchOrders, login, refundOrder } from '../api'
+import { fetchOrders, isNetworkError, login, refundOrder } from '../api'
+import { offlineStore } from '../services/offline/OfflineStore'
+import { offlineSnowflake } from '../services/offline/Snowflake'
 import { usePosStore } from '../stores/posStore'
 import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
 import { PrintFormatter as F } from '../services/print/PrintFormatter'
@@ -143,6 +145,8 @@ const loading = ref(false)
 const submitting = ref(false)
 // 服务端返回的订单列表（已转换为页面展示模型）
 const orders = ref([])
+// 是否处于离线查询模式（数据来自本机订单库）
+const offlineMode = ref(false)
 
 // 搜索结果：服务端已按关键字过滤，前端不再重复过滤
 const resultOrders = computed(() => orders.value)
@@ -194,8 +198,17 @@ const loadOrders = async () => {
   try {
     const data = await fetchOrders({ keyword: keyword.value.trim(), pageSize: 20 })
     orders.value = (data.items || []).map(toDisplay)
+    offlineMode.value = false
   } catch (err) {
-    ElMessage.error(`订单查询失败：${err.message}`)
+    // 网络不可用：回退到本机订单库，保证离线也能退货
+    if (!isNetworkError(err)) {
+      ElMessage.error(`订单查询失败：${err.message}`)
+      return
+    }
+    const localOrders = await offlineStore.searchLocalOrders(keyword.value.trim(), 20)
+    orders.value = localOrders.map(toDisplay)
+    offlineMode.value = true
+    ElMessage.warning('网络不可用，已切换本机订单查询（离线退款将在联网后自动上传）')
   } finally {
     loading.value = false
   }
@@ -269,6 +282,11 @@ const openRefund = (o, type) => {
     prepareRefund(o, type)
     return
   }
+  // 离线状态无法校验店长账号，限制为本人订单退款
+  if (offlineMode.value || !navigator.onLine) {
+    ElMessage.warning('离线状态仅支持本人当班订单退款，非本人订单请联网后退款')
+    return
+  }
   pendingRefund = { order: o, type }
   authForm.value = { username: '', password: '' }
   authDialog.value = true
@@ -307,13 +325,19 @@ const authorizeManager = async () => {
 const confirmRefund = async () => {
   if (!currentOrder.value) return
   submitting.value = true
+  const orderNo = currentOrder.value.orderNo
+  const itemIds = refundType.value === 'item'
+    ? currentOrder.value.items
+      .filter((i) => !i.refunded && isChecked(currentOrder.value, i))
+      .map((i) => i.id)
+    : []
+  // 离线退款单号与时间：联网补传时保持不变，后端按退款单号幂等
+  const refundNo = `RF${offlineSnowflake.nextId()}`
+  const createdAt = new Date().toISOString()
   try {
-    const itemIds = refundType.value === 'item'
-      ? currentOrder.value.items
-        .filter((i) => !i.refunded && isChecked(currentOrder.value, i))
-        .map((i) => i.id)
-      : []
-    const record = await refundOrder(currentOrder.value.orderNo, {
+    const record = await refundOrder(orderNo, {
+      refundNo,
+      createdAt,
       refundType: refundType.value,
       itemIds,
       reason: refundReason.value.trim(),
@@ -325,10 +349,62 @@ const confirmRefund = async () => {
     checkedMap.value = {}
     await loadOrders()
   } catch (err) {
-    ElMessage.error(`退款失败：${err.message}`)
+    // 网络不可用：写入本机订单与退款补传队列
+    if (!isNetworkError(err)) {
+      ElMessage.error(`退款失败：${err.message}`)
+      return
+    }
+    await saveLocalRefund(orderNo, itemIds, refundNo, createdAt)
+    refundDialog.value = false
+    checkedMap.value = {}
+    await loadOrders()
   } finally {
     submitting.value = false
   }
+}
+
+/**
+ * 离线退款：更新本机订单退款状态并写入补传队列
+ * @param {string} orderNo 订单号
+ * @param {string[]} itemIds 退货明细 ID
+ * @param {string} refundNo 退款单号
+ * @param {string} createdAt 退款时间
+ * @returns {Promise<void>}
+ */
+const saveLocalRefund = async (orderNo, itemIds, refundNo, createdAt) => {
+  const local = await offlineStore.getLocalOrder(orderNo)
+  if (!local) {
+    ElMessage.error('本机无该订单记录，离线无法退款，请联网后重试')
+    return
+  }
+  const amount = refundAmount.value
+  const isFull = refundType.value === 'full'
+  // 标记已退货明细并累计退款金额
+  local.items = (local.items || []).map((item) => ({
+    ...item,
+    refunded: isFull || itemIds.includes(item.id) ? true : !!item.refunded,
+  }))
+  local.refunded_amount = +(Number(local.refunded_amount || 0) + amount).toFixed(2)
+  local.status = isFull || local.items.every((item) => item.refunded)
+    ? 'refunded'
+    : 'partially_refunded'
+  await offlineStore.saveLocalOrder(local)
+  await offlineStore.queueItem(
+    'refund',
+    refundNo,
+    {
+      refund_no: refundNo,
+      order_no: orderNo,
+      refund_type: refundType.value,
+      item_ids: itemIds,
+      reason: refundReason.value.trim() || null,
+      cashier_id: store.cashier ? store.cashier.id : null,
+      authorizer_id: authorizerId,
+      created_at: createdAt,
+    },
+    createdAt,
+  )
+  ElMessage.warning(`已离线受理退款 ¥${amount.toFixed(2)}，联网后自动上传`)
 }
 
 onMounted(loadOrders)

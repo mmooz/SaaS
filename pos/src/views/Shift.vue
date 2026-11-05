@@ -9,7 +9,9 @@
     <div class="page-body">
       <!-- 当前班次信息卡 -->
       <section class="info-card">
-        <div class="card-title">{{ shift ? '当前班次' : '尚未接班' }}</div>
+        <div class="card-title">
+          {{ shift ? (offlineShift ? '当前班次（离线）' : '当前班次') : '尚未接班' }}
+        </div>
 
         <!-- 未接班：填写现金底金后开班 -->
         <div v-if="!shift" class="open-box">
@@ -112,7 +114,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft, Printer, Switch } from '@element-plus/icons-vue'
-import { closeShift, fetchCurrentShift, fetchShiftSummary, openShift } from '../api'
+import { closeShift, fetchCurrentShift, fetchShiftSummary, isNetworkError, openShift } from '../api'
+import { offlineStore } from '../services/offline/OfflineStore'
+import { offlineSnowflake } from '../services/offline/Snowflake'
 import { PrintService } from '../services/print/PrintService'
 import { PrintFormatter as F } from '../services/print/PrintFormatter'
 import { usePosStore } from '../stores/posStore'
@@ -128,6 +132,8 @@ const baseCash = ref(500)
 const settled = ref(false)
 // 交班时间文案
 const closeTime = ref('')
+// 当前班次是否为本机离线班次
+const offlineShift = ref(false)
 
 // 本班汇总（页面展示用）
 const summary = reactive({
@@ -169,7 +175,43 @@ const applySummary = (data) => {
 }
 
 /**
- * 加载当前班次与本班汇总
+ * 按本机订单统计班次汇总（离线交班时使用）
+ * @param {string} shiftId 班次 ID
+ * @returns {Promise<void>}
+ */
+const loadLocalSummary = async (shiftId) => {
+  const orders = await offlineStore.listOrdersByShift(shiftId)
+  const payments = new Map()
+  let sales = 0
+  let refund = 0
+  for (const order of orders) {
+    sales += Number(order.total_amount) || 0
+    refund += Number(order.refunded_amount) || 0
+    try {
+      const detail = JSON.parse(order.pay_details || '{}')
+      for (const [method, amount] of Object.entries(detail)) {
+        payments.set(method, (payments.get(method) || 0) + (Number(amount) || 0))
+      }
+    } catch {
+      // 支付明细损坏时跳过该单，不影响其余统计
+    }
+  }
+  summary.orders = orders.length
+  summary.sales = +sales.toFixed(2)
+  summary.refund = +refund.toFixed(2)
+  summary.payments = [...payments.entries()].map(([method, amount]) => ({
+    method,
+    amount: +amount.toFixed(2),
+    count: 0,
+  }))
+  const cash = summary.payments.find((p) => p.method === '现金')?.amount || 0
+  summary.cash = cash
+  summary.cashShould = +(Number(shift.value?.base_cash || 0) + cash).toFixed(2)
+  summary.actualCash = null
+}
+
+/**
+ * 加载当前班次与本班汇总（网络不可用时回退到本机班次）
  * @returns {Promise<void>}
  */
 const loadShift = async () => {
@@ -185,11 +227,44 @@ const loadShift = async () => {
       store.setShiftId(current.id)
       const data = await fetchShiftSummary(current.id)
       applySummary(data)
+      // 同步一份本机快照，供断网时交班使用
+      await offlineStore.saveLocalShift({
+        id: current.id,
+        cashier_id: current.cashier_id,
+        start_at: current.start_at,
+        base_cash: current.base_cash,
+        total_sales: data.total_sales,
+        order_count: data.order_count,
+        status: 'open',
+        synced: true,
+      })
     } else {
       store.setShiftId(null)
     }
+    offlineShift.value = false
   } catch (err) {
-    ElMessage.error(`班次查询失败：${err.message}`)
+    // 非网络异常（如接口报错）直接提示，避免误建离线班次
+    if (!isNetworkError(err)) {
+      ElMessage.error(`班次查询失败：${err.message}`)
+      return
+    }
+    // 网络异常：载入本机进行中的班次，保证离线也能交班
+    const local = await offlineStore.getOpenShift(store.cashier.id)
+    if (local) {
+      shift.value = {
+        id: local.shift_id,
+        cashier_id: local.cashier_id,
+        start_at: local.start_at,
+        base_cash: local.base_cash,
+        status: 'open',
+      }
+      offlineShift.value = true
+      store.setShiftId(local.shift_id)
+      await loadLocalSummary(local.shift_id)
+      ElMessage.warning('网络不可用，已载入本机班次（离线统计）')
+    } else {
+      ElMessage.warning(`班次查询失败，可离线接班：${err.message}`)
+    }
   } finally {
     loading.value = false
   }
@@ -214,7 +289,29 @@ const doOpenShift = async () => {
     applySummary(data)
     ElMessage.success('接班成功，本班订单将自动归属统计')
   } catch (err) {
-    ElMessage.error(`接班失败：${err.message}`)
+    // 非网络异常直接提示，避免重复创建班次
+    if (!isNetworkError(err)) {
+      ElMessage.error(`接班失败：${err.message}`)
+      return
+    }
+    // 网络不可用：本机接班，联网后由补传队列同步到后台
+    const localShift = {
+      id: offlineSnowflake.nextId(),
+      cashier_id: store.cashier.id,
+      start_at: new Date().toISOString(),
+      base_cash: baseCash.value,
+      total_sales: 0,
+      order_count: 0,
+      status: 'open',
+      synced: false,
+    }
+    await offlineStore.saveLocalShift(localShift)
+    shift.value = localShift
+    offlineShift.value = true
+    store.setShiftId(localShift.id)
+    await loadLocalSummary(localShift.id)
+    settled.value = false
+    ElMessage.warning(`网络不可用，已本机接班，联网后自动补传（${err.message}）`)
   } finally {
     loading.value = false
   }
@@ -239,12 +336,51 @@ const doHandover = async () => {
       },
     )
     loading.value = true
-    const data = await closeShift(shift.value.id, { actualCash: Number(value) })
-    applySummary(data)
-    settled.value = true
-    closeTime.value = formatTime(data.shift.end_at || new Date())
-    store.setShiftId(null)
-    ElMessage.success('交班成功，已生成本班汇总小票')
+    try {
+      const data = await closeShift(shift.value.id, { actualCash: Number(value) })
+      applySummary(data)
+      summary.actualCash = Number(value)
+      settled.value = true
+      closeTime.value = formatTime(data.shift.end_at || new Date())
+      // 本机班次同步为已交班
+      await offlineStore.saveLocalShift({
+        id: shift.value.id,
+        cashier_id: shift.value.cashier_id,
+        start_at: shift.value.start_at,
+        end_at: data.shift.end_at,
+        base_cash: shift.value.base_cash,
+        total_sales: summary.sales,
+        order_count: summary.orders,
+        status: 'closed',
+        synced: true,
+      })
+      store.setShiftId(null)
+      offlineShift.value = false
+      ElMessage.success('交班成功，已生成本班汇总小票')
+    } catch (err) {
+      // 非网络异常交由外层提示，避免把服务端拒绝误判为离线
+      if (!isNetworkError(err)) throw err
+      // 网络不可用：按本机订单统计并本地交班，班次进入补传队列
+      await loadLocalSummary(shift.value.id)
+      const endAt = new Date().toISOString()
+      summary.actualCash = Number(value)
+      await offlineStore.saveLocalShift({
+        id: shift.value.id,
+        cashier_id: shift.value.cashier_id,
+        start_at: shift.value.start_at,
+        end_at: endAt,
+        base_cash: shift.value.base_cash,
+        total_sales: summary.sales,
+        order_count: summary.orders,
+        status: 'closed',
+        synced: false,
+      })
+      settled.value = true
+      closeTime.value = formatTime(endAt)
+      store.setShiftId(null)
+      offlineShift.value = false
+      ElMessage.warning(`网络不可用，已本机交班（离线统计），联网后自动补传：${err.message}`)
+    }
   } catch (err) {
     // 用户取消弹窗时不提示错误
     if (err !== 'cancel' && err?.message) ElMessage.error(`交班失败：${err.message}`)
