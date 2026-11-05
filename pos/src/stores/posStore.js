@@ -11,6 +11,7 @@ const LS_CART = 'pos_cart' // 购物车本地缓存
 const LS_HANG = 'pos_hang_orders' // 挂单本地缓存
 const LS_OFFLINE = 'pos_offline_orders' // 待上传订单队列
 const LS_CASHIER = 'pos_cashier' // 已登录收银员（重启后保持登录）
+const LS_SHIFT = 'pos_shift_id' // 当前进行中的班次 ID（订单归属用）
 
 /**
  * 从 localStorage 读取 JSON，解析失败返回默认值
@@ -37,6 +38,8 @@ export const usePosStore = defineStore('pos', {
     lastSyncTime: null,
     // 当前收银员（从本地缓存恢复，退出登录后清空）
     cashier: loadLS(LS_CASHIER, null),
+    // 当前进行中的班次 ID（订单上传时归属班次，未接班为 null）
+    shiftId: loadLS(LS_SHIFT, null),
     // 当前识别的会员（null 表示散客）
     member: null,
     // 当前生效的促销规则
@@ -161,9 +164,24 @@ export const usePosStore = defineStore('pos', {
     clearCashier() {
       this.cashier = null
       this.member = null
+      this.shiftId = null
       this.clearCart()
       localStorage.removeItem(LS_CASHIER)
+      localStorage.removeItem(LS_SHIFT)
       clearAuthToken()
+    },
+
+    /**
+     * 设置当前班次（接班后写入，交班后清空）
+     * @param {number|null} shiftId 班次 ID
+     */
+    setShiftId(shiftId) {
+      this.shiftId = shiftId || null
+      if (shiftId) {
+        localStorage.setItem(LS_SHIFT, JSON.stringify(shiftId))
+      } else {
+        localStorage.removeItem(LS_SHIFT)
+      }
     },
 
     /**
@@ -321,6 +339,7 @@ export const usePosStore = defineStore('pos', {
       const order = {
         order_no: orderNo,
         cashier_id: this.cashier ? this.cashier.id : null,
+        shift_id: this.shiftId,
         status: 'paid',
         total_amount: total,
         discount_amount: discount > 0 ? discount : 0,

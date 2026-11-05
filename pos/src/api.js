@@ -199,3 +199,49 @@ export function consumeMember(memberId, data) {
     body: JSON.stringify({ amount: data.amount, order_no: data.orderNo || null }),
   })
 }
+
+/**
+ * 接班开班
+ * @param {object} data { cashierId, baseCash }
+ * @returns {Promise<object>} 进行中的班次
+ */
+export function openShift(data) {
+  return request('/api/shifts/open', {
+    method: 'POST',
+    body: JSON.stringify({ cashier_id: data.cashierId, base_cash: data.baseCash ?? 0 }),
+  })
+}
+
+/**
+ * 查询收银员当前进行中的班次
+ * @param {number} cashierId 收银员用户 ID
+ * @returns {Promise<object|null>} 班次或 null
+ */
+export function fetchCurrentShift(cashierId) {
+  return request(`/api/shifts/current?cashier_id=${encodeURIComponent(cashierId)}`)
+}
+
+/**
+ * 查询班次汇总
+ * @param {number} shiftId 班次 ID
+ * @returns {Promise<object>} 汇总数据
+ */
+export function fetchShiftSummary(shiftId) {
+  return request(`/api/shifts/${encodeURIComponent(shiftId)}/summary`)
+}
+
+/**
+ * 交班
+ * @param {number} shiftId 班次 ID
+ * @param {object} data { actualCash, remark }
+ * @returns {Promise<object>} 交班后的班次汇总
+ */
+export function closeShift(shiftId, data = {}) {
+  return request(`/api/shifts/${encodeURIComponent(shiftId)}/close`, {
+    method: 'POST',
+    body: JSON.stringify({
+      actual_cash: data.actualCash ?? null,
+      remark: data.remark || null,
+    }),
+  })
+}
