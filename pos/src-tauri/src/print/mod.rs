@@ -4,6 +4,7 @@ mod escpos_builder;
 mod gbk;
 mod label_item;
 mod label_job;
+mod printer_status;
 mod receipt_item;
 mod receipt_job;
 mod tspl_builder;
@@ -12,6 +13,7 @@ mod win_spooler;
 
 pub use escpos_builder::EscPosBuilder;
 pub use label_job::LabelJob;
+pub use printer_status::PrinterStatus;
 pub use receipt_job::ReceiptJob;
 pub use tspl_builder::TsplBuilder;
 
@@ -44,6 +46,26 @@ pub fn print_raw(printer: &str, data: &[u8]) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (printer, data);
+        Err("当前平台暂不支持原生直连打印".to_string())
+    }
+}
+
+/// 查询指定打印机当前状态
+///
+/// # 参数
+/// - printer：系统打印机名称
+///
+/// # 返回
+/// - `Ok(PrinterStatus)`：状态位与告警说明
+/// - `Err(String)`：当前平台不支持、打印机不存在或读取失败
+pub fn printer_status(printer: &str) -> Result<PrinterStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        win_spooler::WinSpooler::status(printer)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = printer;
         Err("当前平台暂不支持原生直连打印".to_string())
     }
 }

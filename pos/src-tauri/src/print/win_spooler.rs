@@ -3,10 +3,12 @@
 use std::ffi::c_void;
 
 use windows_sys::Win32::Graphics::Printing::{
-    ClosePrinter, EndDocPrinter, EndPagePrinter, EnumPrintersW, OpenPrinterW, StartDocPrinterW,
-    StartPagePrinter, WritePrinter, DOC_INFO_1W, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL,
-    PRINTER_HANDLE, PRINTER_INFO_4W,
+    ClosePrinter, EndDocPrinter, EndPagePrinter, EnumPrintersW, GetPrinterW, OpenPrinterW,
+    StartDocPrinterW, StartPagePrinter, WritePrinter, DOC_INFO_1W, PRINTER_ENUM_CONNECTIONS,
+    PRINTER_ENUM_LOCAL, PRINTER_HANDLE, PRINTER_INFO_4W,
 };
+
+use super::printer_status::PrinterStatus;
 
 /// Win32 打印队列操作封装
 pub struct WinSpooler;
@@ -134,6 +136,80 @@ impl WinSpooler {
             }
             Ok(())
         }
+    }
+
+    /// 查询打印机当前状态（GetPrinter level 6 返回状态位）
+    ///
+    /// # 参数
+    /// - printer_name：系统打印机名称
+    ///
+    /// # 返回
+    /// - `Ok(PrinterStatus)`：状态位与告警说明
+    /// - `Err(String)`：打印机不存在或读取状态失败
+    pub fn status(printer_name: &str) -> Result<PrinterStatus, String> {
+        if printer_name.trim().is_empty() {
+            return Err("未选择打印机".to_string());
+        }
+
+        unsafe {
+            let printer = Self::wide(printer_name);
+            let mut handle = PRINTER_HANDLE {
+                Value: std::ptr::null_mut(),
+            };
+            if OpenPrinterW(printer.as_ptr(), &mut handle, std::ptr::null()) == 0 {
+                return Err(format!(
+                    "打开打印机「{}」失败：{}",
+                    printer_name,
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            let result = Self::read_status(handle, printer_name);
+            ClosePrinter(handle);
+            result
+        }
+    }
+
+    /// 读取 printer level 6 状态位
+    ///
+    /// # 参数
+    /// - handle：已打开的打印机句柄
+    /// - printer_name：打印机名称（仅用于错误提示）
+    ///
+    /// # 返回
+    /// - `Ok(PrinterStatus)`：状态位解析结果
+    /// - `Err(String)`：读取失败
+    unsafe fn read_status(handle: PRINTER_HANDLE, printer_name: &str) -> Result<PrinterStatus, String> {
+        let mut needed = 0u32;
+        // 第一次调用仅探测所需缓冲区大小，返回 FALSE 属正常
+        GetPrinterW(handle, 6, std::ptr::null_mut(), 0, &mut needed);
+        if needed == 0 {
+            return Err(format!(
+                "读取打印机「{}」状态失败：{}",
+                printer_name,
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        // 按 u32 对齐分配缓冲区，避免从字节切片读取状态位时的对齐问题
+        let words = (needed as usize + 3) / 4;
+        let mut buffer = vec![0u32; words];
+        if GetPrinterW(
+            handle,
+            6,
+            buffer.as_mut_ptr() as *mut u8,
+            needed,
+            &mut needed,
+        ) == 0
+        {
+            return Err(format!(
+                "读取打印机「{}」状态失败：{}",
+                printer_name,
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        Ok(PrinterStatus::from_flags(printer_name, buffer[0]))
     }
 
     /// 把字符串编码为 Windows 宽字符（带结尾 0）

@@ -74,6 +74,15 @@ fn list_printers() -> Result<Vec<String>, String> {
     crate::print::list_printers()
 }
 
+/// 查询打印机状态命令
+///
+/// # 参数
+/// - printer_name：系统打印机名称
+#[tauri::command]
+fn printer_status(printer_name: String) -> Result<crate::print::PrinterStatus, String> {
+    crate::print::printer_status(&printer_name)
+}
+
 /// 原生直连打印小票命令（ESC/POS）
 ///
 /// # 参数
@@ -127,6 +136,7 @@ pub fn run() {
             scale_zero,
             scale_connected,
             list_printers,
+            printer_status,
             native_print_receipt,
             native_print_labels,
             native_print_supported
