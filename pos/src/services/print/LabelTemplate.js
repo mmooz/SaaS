@@ -3,6 +3,7 @@
  */
 import { PrintFormatter as F } from './PrintFormatter.js'
 import { Code128 } from './Code128.js'
+import { LabelCode } from './LabelCode.js'
 
 export class LabelTemplate {
   /**
@@ -126,10 +127,7 @@ export class LabelTemplate {
    * @returns {string} 条码字符串
    */
   buildCode(order, item) {
-    const digits = String(order.orderNo || '').replace(/\D/g, '').slice(-8)
-    const productPart = String(item.productId ?? 0).padStart(3, '0')
-    const weightPart = String(Math.round(Number(item.weight) * 100)).padStart(4, '0')
-    return `${digits}${productPart}${weightPart}`
+    return LabelCode.build(order.orderNo, item.productId, item.weight)
   }
 
   /**

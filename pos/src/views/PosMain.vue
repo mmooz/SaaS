@@ -24,7 +24,7 @@
       <!-- 左栏：分类 + 商品 -->
       <aside class="col-products">
         <div class="search-bar">
-          <el-input v-model="keyword" placeholder="扫码 / 商品名 / 拼音码" size="large" clearable>
+          <el-input v-model="keyword" placeholder="扫码 / 商品名 / 拼音码" size="large" clearable @keyup.enter="handleScan">
             <template #prefix><el-icon><Search /></el-icon></template>
           </el-input>
         </div>
@@ -237,6 +237,7 @@ import {
 import { usePosStore } from '../stores/posStore'
 import { PrintService } from '../services/print/PrintService'
 import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
+import { LabelCode } from '../services/print/LabelCode'
 import { createMember, fetchMemberByMobile } from '../api'
 
 const router = useRouter()
@@ -316,6 +317,50 @@ const addProduct = (p) => {
   currentProduct.value = p
   manualWeight.value = false
   startWeighing()
+}
+
+// 扫码回车：优先匹配商品条码，其次解析称重标签码
+const handleScan = () => {
+  const code = keyword.value.trim()
+  if (!code) return
+
+  // 1) 商品自有条码精确匹配
+  const byBarcode = products.value.find((p) => p.barcode && String(p.barcode) === code)
+  if (byBarcode) {
+    keyword.value = ''
+    if (byBarcode.pricingMode === 'count') {
+      store.addCountProduct(byBarcode)
+      ElMessage.success(`已加入：${byBarcode.name}`)
+    } else {
+      currentProduct.value = byBarcode
+      manualWeight.value = false
+      startWeighing()
+      ElMessage.info(`请将「${byBarcode.name}」放上秤盘称重`)
+    }
+    return
+  }
+
+  // 2) 称重标签码：解析商品与重量后直接入车
+  const label = LabelCode.parse(code)
+  if (label) {
+    const product = products.value.find(
+      (p) => p.id === label.productId && p.pricingMode === 'weigh',
+    )
+    if (!product) {
+      ElMessage.warning(`标签商品不存在：#${label.productId}`)
+      return
+    }
+    if (label.weight <= 0) {
+      ElMessage.warning('标签重量无效')
+      return
+    }
+    store.confirmWeighted(product, label.weight)
+    keyword.value = ''
+    ElMessage.success(`${product.name} ${label.weight.toFixed(2)}kg · ¥${(label.weight * product.price).toFixed(2)}`)
+    return
+  }
+
+  ElMessage.warning('未找到对应商品或标签码')
 }
 
 /* ---------- 称重模拟（模拟秤） ---------- */
