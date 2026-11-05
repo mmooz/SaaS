@@ -8,6 +8,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id, get_tenant_id
 from app.models import Promotion
 from app.schemas.promotion_create import PromotionCreate
 from app.schemas.promotion_out import PromotionOut
@@ -61,10 +62,30 @@ def _to_out(promo: Promotion) -> PromotionOut:
     )
 
 
+def _get_promotion(db: Session, promotion_id: int, store_id: int) -> Promotion:
+    """按主键取促销规则并校验归属当前门店，不存在则抛 404。
+
+    :param db: 数据库会话
+    :param promotion_id: 促销规则 ID
+    :param store_id: 当前门店 ID
+    :return: 促销 ORM 对象
+    """
+    promo = db.scalar(
+        select(Promotion).where(Promotion.id == promotion_id, Promotion.store_id == store_id)
+    )
+    if not promo:
+        raise HTTPException(status_code=404, detail="促销规则不存在")
+    return promo
+
+
 @router.get("", response_model=list[PromotionOut])
-def list_promotions(enabled: bool | None = None, db: Session = Depends(get_db)):
-    """查询促销规则列表（可按启用状态筛选，新建在前）。"""
-    stmt = select(Promotion)
+def list_promotions(
+    enabled: bool | None = None,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """查询促销规则列表（当前门店，可按启用状态筛选，新建在前）。"""
+    stmt = select(Promotion).where(Promotion.store_id == store_id)
     if enabled is not None:
         stmt = stmt.where(Promotion.enabled == enabled)
     rows = db.scalars(stmt.order_by(Promotion.id.desc())).all()
@@ -72,10 +93,14 @@ def list_promotions(enabled: bool | None = None, db: Session = Depends(get_db)):
 
 
 @router.get("/active", response_model=list[PromotionOut])
-def list_active_promotions(db: Session = Depends(get_db)):
+def list_active_promotions(
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """查询当前生效的促销规则（已启用且在时间窗口内），供收银端规则引擎使用。"""
     now = datetime.now()
     stmt = select(Promotion).where(
+        Promotion.store_id == store_id,
         Promotion.enabled.is_(True),
         or_(Promotion.start_at.is_(None), Promotion.start_at <= now),
         or_(Promotion.end_at.is_(None), Promotion.end_at >= now),
@@ -85,8 +110,14 @@ def list_active_promotions(db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=PromotionOut, status_code=201)
-def create_promotion(data: PromotionCreate, db: Session = Depends(get_db)):
+def create_promotion(
+    data: PromotionCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """新增促销规则。"""
+    # params/product_ids/category_ids 需序列化为 JSON 字符串存储
     promo = Promotion(
         type=data.type,
         name=data.name,
@@ -96,7 +127,8 @@ def create_promotion(data: PromotionCreate, db: Session = Depends(get_db)):
         start_at=data.start_at,
         end_at=data.end_at,
         enabled=data.enabled,
-        store_id=data.store_id,
+        tenant_id=tenant_id,
+        store_id=store_id,
     )
     db.add(promo)
     db.commit()
@@ -106,12 +138,13 @@ def create_promotion(data: PromotionCreate, db: Session = Depends(get_db)):
 
 @router.patch("/{promotion_id}", response_model=PromotionOut)
 def update_promotion(
-    promotion_id: int, data: PromotionUpdate, db: Session = Depends(get_db)
+    promotion_id: int,
+    data: PromotionUpdate,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
     """更新促销规则（仅修改传入字段）。"""
-    promo = db.get(Promotion, promotion_id)
-    if not promo:
-        raise HTTPException(status_code=404, detail="促销规则不存在")
+    promo = _get_promotion(db, promotion_id, store_id)
 
     if data.name is not None:
         promo.name = data.name
@@ -134,10 +167,12 @@ def update_promotion(
 
 
 @router.delete("/{promotion_id}", status_code=204)
-def delete_promotion(promotion_id: int, db: Session = Depends(get_db)):
+def delete_promotion(
+    promotion_id: int,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """删除促销规则。"""
-    promo = db.get(Promotion, promotion_id)
-    if not promo:
-        raise HTTPException(status_code=404, detail="促销规则不存在")
+    promo = _get_promotion(db, promotion_id, store_id)
     db.delete(promo)
     db.commit()

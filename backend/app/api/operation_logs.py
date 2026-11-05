@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_tenant_id
 from app.services.operation_log_service import OperationLogService
 
 # 操作日志路由
@@ -16,6 +17,7 @@ def list_operation_logs(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
 ):
-    """分页查询操作日志（按操作内容/操作人搜索）。"""
-    return OperationLogService.list_logs(db, keyword, page, page_size)
+    """分页查询操作日志（当前租户，按操作内容/操作人搜索）。"""
+    return OperationLogService.list_logs(db, keyword, page, page_size, tenant_id)

@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_tenant_id
 from app.models import User
 from app.schemas.user_admin_out import UserAdminOut
 from app.schemas.user_create import UserCreate
@@ -28,15 +29,32 @@ def _to_out(user: User) -> UserAdminOut:
     return UserAdminOut.model_validate(user)
 
 
+def _get_user(db: Session, user_id: int, tenant_id: int) -> User:
+    """按主键取用户并校验归属当前租户，不存在则抛 404。
+
+    :param db: 数据库会话
+    :param user_id: 用户 ID
+    :param tenant_id: 当前租户 ID
+    :return: 用户 ORM 对象
+    """
+    user = db.scalar(
+        select(User).where(User.id == user_id, User.tenant_id == tenant_id)
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return user
+
+
 @router.get("", response_model=dict)
 def list_users(
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 50,
     db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
 ):
-    """分页查询后台用户（支持用户名/姓名搜索）。"""
-    stmt = select(User).order_by(User.id)
+    """分页查询后台用户（当前租户，支持用户名/姓名搜索）。"""
+    stmt = select(User).where(User.tenant_id == tenant_id).order_by(User.id)
     if keyword:
         kw = f"%{keyword}%"
         stmt = stmt.where(or_(User.username.like(kw), User.name.like(kw)))
@@ -51,12 +69,19 @@ def list_users(
 
 
 @router.post("", response_model=UserAdminOut, status_code=201)
-def create_user(data: UserCreate, db: Session = Depends(get_db)):
-    """新增后台用户（用户名唯一，密码默认 123456）。"""
-    exists = db.scalar(select(User).where(User.username == data.username.strip()))
+def create_user(
+    data: UserCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
+    """新增后台用户（当前租户内用户名唯一，密码默认 123456）。"""
+    exists = db.scalar(
+        select(User).where(User.username == data.username.strip(), User.tenant_id == tenant_id)
+    )
     if exists:
         raise HTTPException(status_code=409, detail="用户名已存在")
     user = User(
+        tenant_id=tenant_id,
         username=data.username.strip(),
         name=data.name.strip(),
         role=data.role,
@@ -65,18 +90,23 @@ def create_user(data: UserCreate, db: Session = Depends(get_db)):
     )
     db.add(user)
     db.flush()
-    OperationLogService.record(db, "创建用户", f"新增用户 {user.username}（{user.role}）")
+    OperationLogService.record(
+        db, "创建用户", f"新增用户 {user.username}（{user.role}）", tenant_id=tenant_id
+    )
     db.commit()
     db.refresh(user)
     return _to_out(user)
 
 
 @router.patch("/{user_id}", response_model=UserAdminOut)
-def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db)):
+def update_user(
+    user_id: int,
+    data: UserUpdate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
     """更新用户姓名/角色/启用状态，可同时重置密码。"""
-    user = db.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    user = _get_user(db, user_id, tenant_id)
     updates = data.model_dump(exclude_unset=True)
     # 密码单独处理，不直接写入字段
     password = updates.pop("password", None)
@@ -84,20 +114,26 @@ def update_user(user_id: int, data: UserUpdate, db: Session = Depends(get_db)):
         setattr(user, key, value)
     if password:
         user.password_hash = PasswordHasher.hash(password)
-    OperationLogService.record(db, "修改用户", f"更新用户 {user.username} 的资料")
+    OperationLogService.record(
+        db, "修改用户", f"更新用户 {user.username} 的资料", tenant_id=tenant_id
+    )
     db.commit()
     db.refresh(user)
     return _to_out(user)
 
 
 @router.post("/{user_id}/reset-password", response_model=UserAdminOut)
-def reset_password(user_id: int, db: Session = Depends(get_db)):
+def reset_password(
+    user_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+):
     """把用户密码重置为默认密码 123456。"""
-    user = db.get(User, user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    user = _get_user(db, user_id, tenant_id)
     user.password_hash = PasswordHasher.hash(DEFAULT_PASSWORD)
-    OperationLogService.record(db, "重置密码", f"重置用户 {user.username} 的密码")
+    OperationLogService.record(
+        db, "重置密码", f"重置用户 {user.username} 的密码", tenant_id=tenant_id
+    )
     db.commit()
     db.refresh(user)
     return _to_out(user)

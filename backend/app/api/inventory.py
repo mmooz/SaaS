@@ -5,6 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id, get_tenant_id
 from app.models import InventoryMovement, Product
 from app.schemas.inventory_breakage import InventoryBreakage
 from app.schemas.inventory_inbound import InventoryInbound
@@ -16,14 +17,17 @@ from app.services.inventory_service import InventoryService
 router = APIRouter(prefix="/api/inventory", tags=["库存管理"])
 
 
-def _get_product(db: Session, product_id: int) -> Product:
-    """按主键取商品，不存在则抛 404。
+def _get_product(db: Session, product_id: int, store_id: int) -> Product:
+    """按主键取商品并校验归属当前门店，不存在则抛 404。
 
     :param db: 数据库会话
     :param product_id: 商品 ID
+    :param store_id: 当前门店 ID
     :return: 商品 ORM 对象
     """
-    product = db.get(Product, product_id)
+    product = db.scalar(
+        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+    )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
     return product
@@ -58,9 +62,10 @@ def list_inventory(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
-    """分页查询库存：支持关键字/分类筛选，low_only 仅看预警商品。"""
-    stmt = select(Product)
+    """分页查询库存：支持关键字/分类筛选，low_only 仅看预警商品（当前门店）。"""
+    stmt = select(Product).where(Product.store_id == store_id)
     if keyword:
         like = f"%{keyword.strip()}%"
         stmt = stmt.where(or_(Product.name.like(like), Product.barcode.like(like)))
@@ -84,12 +89,16 @@ def list_inventory(
 
 
 @router.get("/alerts", response_model=dict)
-def list_alerts(db: Session = Depends(get_db)):
-    """库存预警：返回已售罄或低于安全库存的商品清单。"""
+def list_alerts(
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """库存预警：返回已售罄或低于安全库存的商品清单（当前门店）。"""
     rows = db.scalars(
         select(Product)
         .where(
-            or_(Product.stock <= 0, (Product.safety_stock > 0) & (Product.stock < Product.safety_stock))
+            Product.store_id == store_id,
+            or_(Product.stock <= 0, (Product.safety_stock > 0) & (Product.stock < Product.safety_stock)),
         )
         .order_by(Product.stock)
     ).all()
@@ -97,27 +106,39 @@ def list_alerts(db: Session = Depends(get_db)):
 
 
 @router.post("/inbound", response_model=dict)
-def inbound(data: InventoryInbound, db: Session = Depends(get_db)):
+def inbound(
+    data: InventoryInbound,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """采购入库：增加库存、可选更新进价并写入入库流水。"""
-    product = _get_product(db, data.product_id)
+    product = _get_product(db, data.product_id, store_id)
     # 传入进价时同步更新商品进价
     if data.cost_price is not None:
         product.cost_price = data.cost_price
-    InventoryService.record(db, product, "inbound", data.qty, operator_id=data.operator_id)
+    InventoryService.record(
+        db, product, "inbound", data.qty, operator_id=data.operator_id, tenant_id=tenant_id
+    )
     db.commit()
     db.refresh(product)
     return {"message": "入库成功", "product_id": product.id, "stock": round(product.stock or 0, 3)}
 
 
 @router.post("/stocktake", response_model=dict)
-def stocktake(data: InventoryStocktake, db: Session = Depends(get_db)):
+def stocktake(
+    data: InventoryStocktake,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """盘点：以实盘数覆盖库存并记录差异流水。"""
-    product = _get_product(db, data.product_id)
+    product = _get_product(db, data.product_id, store_id)
     current = product.stock or 0
     diff = round(data.actual - current, 3)
     # 差异为零也记录盘点流水，便于追溯
     InventoryService.record(
-        db, product, "stocktake", diff, operator_id=data.operator_id, apply_stock=False
+        db, product, "stocktake", diff, operator_id=data.operator_id, apply_stock=False, tenant_id=tenant_id
     )
     product.stock = round(data.actual, 3)
     db.commit()
@@ -126,12 +147,19 @@ def stocktake(data: InventoryStocktake, db: Session = Depends(get_db)):
 
 
 @router.post("/breakage", response_model=dict)
-def breakage(data: InventoryBreakage, db: Session = Depends(get_db)):
+def breakage(
+    data: InventoryBreakage,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """报损：扣减库存并写入报损流水，库存不足时拒绝。"""
-    product = _get_product(db, data.product_id)
+    product = _get_product(db, data.product_id, store_id)
     if (product.stock or 0) < data.qty:
         raise HTTPException(status_code=400, detail="报损数量超过当前库存")
-    InventoryService.record(db, product, "breakage", -data.qty, operator_id=data.operator_id)
+    InventoryService.record(
+        db, product, "breakage", -data.qty, operator_id=data.operator_id, tenant_id=tenant_id
+    )
     db.commit()
     db.refresh(product)
     return {"message": "报损成功", "product_id": product.id, "stock": round(product.stock or 0, 3)}
@@ -144,9 +172,10 @@ def list_movements(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
-    """分页查询库存变动流水（时间倒序）。"""
-    stmt = select(InventoryMovement)
+    """分页查询库存变动流水（当前门店，时间倒序）。"""
+    stmt = select(InventoryMovement).where(InventoryMovement.store_id == store_id)
     if product_id:
         stmt = stmt.where(InventoryMovement.product_id == product_id)
     if type:

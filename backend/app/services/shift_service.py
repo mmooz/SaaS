@@ -15,33 +15,46 @@ class ShiftService:
     """交接班业务服务。"""
 
     @staticmethod
-    def open(db: Session, cashier_id: int, base_cash: float) -> ShiftSession:
+    def open(db: Session, cashier_id: int, base_cash: float, tenant_id: int, store_id: int) -> ShiftSession:
         """开班：若已有进行中的班次则直接返回，避免重复开班。
 
         :param db: 数据库会话
         :param cashier_id: 收银员用户 ID
         :param base_cash: 现金底金
+        :param tenant_id: 所属租户 ID
+        :param store_id: 所属门店 ID
         :return: 进行中的班次
         """
-        current = ShiftService.current(db, cashier_id)
+        current = ShiftService.current(db, cashier_id, store_id)
         if current:
             return current
-        shift = ShiftSession(cashier_id=cashier_id, base_cash=base_cash, status="open")
+        shift = ShiftSession(
+            tenant_id=tenant_id,
+            cashier_id=cashier_id,
+            store_id=store_id,
+            base_cash=base_cash,
+            status="open",
+        )
         db.add(shift)
         db.flush()
         return shift
 
     @staticmethod
-    def current(db: Session, cashier_id: int) -> ShiftSession | None:
-        """查询收银员当前进行中的班次。
+    def current(db: Session, cashier_id: int, store_id: int) -> ShiftSession | None:
+        """查询收银员当前进行中的班次（限定门店）。
 
         :param db: 数据库会话
         :param cashier_id: 收银员用户 ID
+        :param store_id: 所属门店 ID
         :return: 进行中的班次，无则返回 None
         """
         return db.scalar(
             select(ShiftSession)
-            .where(ShiftSession.cashier_id == cashier_id, ShiftSession.status == "open")
+            .where(
+                ShiftSession.cashier_id == cashier_id,
+                ShiftSession.store_id == store_id,
+                ShiftSession.status == "open",
+            )
             .order_by(ShiftSession.id.desc())
         )
 
@@ -121,11 +134,13 @@ class ShiftService:
         )
 
     @staticmethod
-    def sync(db: Session, items: list) -> int:
+    def sync(db: Session, items: list, tenant_id: int, store_id: int) -> int:
         """批量补传离线班次：按班次主键幂等写入或更新。
 
         :param db: 数据库会话
         :param items: 班次快照列表（ShiftSyncItem）
+        :param tenant_id: 所属租户 ID
+        :param store_id: 所属门店 ID
         :return: 成功处理的班次数
         """
         synced = 0
@@ -142,8 +157,9 @@ class ShiftService:
                 db.add(
                     ShiftSession(
                         id=item.id,
+                        tenant_id=tenant_id,
                         cashier_id=item.cashier_id,
-                        store_id=item.store_id,
+                        store_id=store_id,
                         start_at=item.start_at,
                         end_at=item.end_at,
                         base_cash=item.base_cash,

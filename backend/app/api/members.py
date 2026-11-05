@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id, get_tenant_id
 from app.models import Member, MemberTransaction, Order
 from app.schemas.member_consume import MemberConsume
 from app.schemas.member_create import MemberCreate
@@ -20,32 +21,41 @@ from app.schemas.member_update import MemberUpdate
 router = APIRouter(prefix="/api/members", tags=["会员管理"])
 
 
-def _get_member(db: Session, member_id: int) -> Member:
-    """按主键取会员，不存在则抛 404。
+def _get_member(db: Session, member_id: int, store_id: int) -> Member:
+    """按主键取会员并校验归属当前门店，不存在则抛 404。
 
     :param db: 数据库会话
     :param member_id: 会员 ID
+    :param store_id: 当前门店 ID
     :return: 会员 ORM 对象
     """
-    member = db.get(Member, member_id)
+    member = db.scalar(
+        select(Member).where(Member.id == member_id, Member.store_id == store_id)
+    )
     if not member:
         raise HTTPException(status_code=404, detail="会员不存在")
     return member
 
 
 @router.post("", response_model=MemberOut, status_code=201)
-def create_member(data: MemberCreate, db: Session = Depends(get_db)):
-    """会员建档：手机号已存在则返回 409。"""
-    # 手机号唯一性校验
-    existing = db.scalar(select(Member).where(Member.mobile == data.mobile))
+def create_member(
+    data: MemberCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
+    """会员建档：同门店手机号已存在则返回 409。"""
+    # 手机号唯一性校验（限定当前门店）
+    existing = db.scalar(
+        select(Member).where(Member.mobile == data.mobile, Member.store_id == store_id)
+    )
     if existing:
         raise HTTPException(status_code=409, detail="该手机号已建档")
 
     member = Member(
-        mobile=data.mobile,
-        name=data.name,
-        level=data.level,
-        store_id=data.store_id,
+        **data.model_dump(exclude={"store_id"}),
+        tenant_id=tenant_id,
+        store_id=store_id,
     )
     db.add(member)
     db.commit()
@@ -59,9 +69,10 @@ def list_members(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
-    """分页查询会员：可按手机号或姓名模糊搜索。"""
-    stmt = select(Member)
+    """分页查询会员：可按手机号或姓名模糊搜索（限定当前门店）。"""
+    stmt = select(Member).where(Member.store_id == store_id)
     if keyword:
         like = f"%{keyword.strip()}%"
         stmt = stmt.where(or_(Member.mobile.like(like), Member.name.like(like)))
@@ -79,23 +90,35 @@ def list_members(
 
 
 @router.get("/stats", response_model=dict)
-def member_stats(db: Session = Depends(get_db)):
-    """会员概览统计：总数、今日新增、储值总余额、本月充值及消费排行前十。"""
+def member_stats(
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """会员概览统计：总数、今日新增、储值总余额、本月充值及消费排行前十（当前门店）。"""
     now = datetime.now()
     today_start = datetime(now.year, now.month, now.day)
     month_start = datetime(now.year, now.month, 1)
 
-    total = db.scalar(select(func.count()).select_from(Member)) or 0
+    total = db.scalar(
+        select(func.count()).select_from(Member).where(Member.store_id == store_id)
+    ) or 0
     new_today = (
         db.scalar(
-            select(func.count()).select_from(Member).where(Member.created_at >= today_start)
+            select(func.count())
+            .select_from(Member)
+            .where(Member.store_id == store_id, Member.created_at >= today_start)
         )
         or 0
     )
-    balance_total = db.scalar(select(func.sum(Member.balance))) or 0
+    balance_total = db.scalar(
+        select(func.sum(Member.balance)).where(Member.store_id == store_id)
+    ) or 0
     recharge_month = (
         db.scalar(
-            select(func.sum(MemberTransaction.amount)).where(
+            select(func.sum(MemberTransaction.amount))
+            .join(Member, Member.id == MemberTransaction.member_id)
+            .where(
+                Member.store_id == store_id,
                 MemberTransaction.type == "recharge",
                 MemberTransaction.created_at >= month_start,
             )
@@ -103,9 +126,12 @@ def member_stats(db: Session = Depends(get_db)):
         or 0
     )
 
-    # 消费排行前十：按累计消费金额倒序
+    # 消费排行前十：按累计消费金额倒序（当前门店）
     top_members = db.scalars(
-        select(Member).order_by(Member.total_spent.desc()).limit(10)
+        select(Member)
+        .where(Member.store_id == store_id)
+        .order_by(Member.total_spent.desc())
+        .limit(10)
     ).all()
     member_ids = [m.id for m in top_members]
     order_counts: dict[int, int] = {}
@@ -113,7 +139,9 @@ def member_stats(db: Session = Depends(get_db)):
     if member_ids:
         count_rows = db.execute(
             select(Order.member_id, func.count(Order.id)).where(
-                Order.member_id.in_(member_ids), Order.status == "paid"
+                Order.member_id.in_(member_ids),
+                Order.status == "paid",
+                Order.store_id == store_id,
             ).group_by(Order.member_id)
         ).all()
         order_counts = {mid: cnt for mid, cnt in count_rows}
@@ -121,6 +149,7 @@ def member_stats(db: Session = Depends(get_db)):
             select(Order.member_id, func.sum(Order.total_amount)).where(
                 Order.member_id.in_(member_ids),
                 Order.status == "paid",
+                Order.store_id == store_id,
                 Order.created_at >= month_start,
             ).group_by(Order.member_id)
         ).all()
@@ -154,9 +183,15 @@ def list_all_transactions(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
 ):
     """分页查询全部会员流水（可按会员/类型筛选），用于后台充值/积分记录。"""
-    stmt = select(MemberTransaction)
+    stmt = (
+        select(MemberTransaction)
+        .join(Member, Member.id == MemberTransaction.member_id)
+        .where(Member.store_id == store_id)
+    )
     if member_id:
         stmt = stmt.where(MemberTransaction.member_id == member_id)
     if type:
@@ -185,18 +220,29 @@ def list_all_transactions(
 
 
 @router.get("/{mobile}", response_model=MemberOut)
-def get_member_by_mobile(mobile: str, db: Session = Depends(get_db)):
-    """按手机号查询会员（收银端扫会员码/输手机号识别）。"""
-    member = db.scalar(select(Member).where(Member.mobile == mobile))
+def get_member_by_mobile(
+    mobile: str,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """按手机号查询会员（收银端扫会员码/输手机号识别，限定当前门店）。"""
+    member = db.scalar(
+        select(Member).where(Member.mobile == mobile, Member.store_id == store_id)
+    )
     if not member:
         raise HTTPException(status_code=404, detail="会员不存在")
     return member
 
 
 @router.patch("/{member_id}", response_model=MemberOut)
-def update_member(member_id: int, data: MemberUpdate, db: Session = Depends(get_db)):
+def update_member(
+    member_id: int,
+    data: MemberUpdate,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """更新会员姓名或等级（仅修改传入字段）。"""
-    member = _get_member(db, member_id)
+    member = _get_member(db, member_id, store_id)
     # 逐字段按需更新，未传字段保持原值
     if data.name is not None:
         member.name = data.name
@@ -208,9 +254,15 @@ def update_member(member_id: int, data: MemberUpdate, db: Session = Depends(get_
 
 
 @router.post("/{member_id}/recharge", response_model=MemberOut)
-def recharge_member(member_id: int, data: MemberRecharge, db: Session = Depends(get_db)):
+def recharge_member(
+    member_id: int,
+    data: MemberRecharge,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """会员储值充值：增加余额并写入充值流水。"""
-    member = _get_member(db, member_id)
+    member = _get_member(db, member_id, store_id)
     # 增加储值余额（充值金额 + 赠送金额）
     credit = round(data.amount + data.gift_amount, 2)
     member.balance = round((member.balance or 0) + credit, 2)
@@ -219,6 +271,7 @@ def recharge_member(member_id: int, data: MemberRecharge, db: Session = Depends(
         member.points = (member.points or 0) + data.bonus_points
     db.add(
         MemberTransaction(
+            tenant_id=tenant_id,
             member_id=member.id,
             type="recharge",
             amount=credit,
@@ -232,9 +285,15 @@ def recharge_member(member_id: int, data: MemberRecharge, db: Session = Depends(
 
 
 @router.post("/{member_id}/consume", response_model=MemberOut)
-def consume_member(member_id: int, data: MemberConsume, db: Session = Depends(get_db)):
+def consume_member(
+    member_id: int,
+    data: MemberConsume,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """会员消费：扣减储值余额、累计消费额并奖励积分。"""
-    member = _get_member(db, member_id)
+    member = _get_member(db, member_id, store_id)
     # 余额不足则拒绝扣款
     if (member.balance or 0) < data.amount:
         raise HTTPException(status_code=400, detail="储值余额不足")
@@ -246,6 +305,7 @@ def consume_member(member_id: int, data: MemberConsume, db: Session = Depends(ge
     member.points = (member.points or 0) + earned
     db.add(
         MemberTransaction(
+            tenant_id=tenant_id,
             member_id=member.id,
             type="consume",
             amount=-data.amount,
@@ -259,9 +319,15 @@ def consume_member(member_id: int, data: MemberConsume, db: Session = Depends(ge
 
 
 @router.post("/{member_id}/points", response_model=MemberOut)
-def adjust_points(member_id: int, data: MemberPointsAdjust, db: Session = Depends(get_db)):
+def adjust_points(
+    member_id: int,
+    data: MemberPointsAdjust,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """手工调整会员积分（正增负减，扣减后不得为负）。"""
-    member = _get_member(db, member_id)
+    member = _get_member(db, member_id, store_id)
     # 扣减积分不能超过当前余额
     if data.points < 0 and (member.points or 0) + data.points < 0:
         raise HTTPException(status_code=400, detail="积分余额不足")
@@ -269,6 +335,7 @@ def adjust_points(member_id: int, data: MemberPointsAdjust, db: Session = Depend
     member.points = (member.points or 0) + data.points
     db.add(
         MemberTransaction(
+            tenant_id=tenant_id,
             member_id=member.id,
             type="points",
             amount=0,
@@ -287,9 +354,10 @@ def list_transactions(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
     """分页查询会员资金/积分流水（时间倒序）。"""
-    _get_member(db, member_id)
+    _get_member(db, member_id, store_id)
     stmt = select(MemberTransaction).where(MemberTransaction.member_id == member_id)
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
     rows = db.scalars(

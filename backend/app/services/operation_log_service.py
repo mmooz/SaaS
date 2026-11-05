@@ -39,19 +39,21 @@ class OperationLogService:
 
     @staticmethod
     def list_logs(
-        db: Session, keyword: str | None, page: int, page_size: int
+        db: Session, keyword: str | None, page: int, page_size: int, tenant_id: int
     ) -> dict:
-        """分页查询操作日志，关联操作人账号/姓名/角色。
+        """分页查询操作日志，关联操作人账号/姓名/角色（限定当前租户）。
 
         :param db: 数据库会话
         :param keyword: 搜索关键字（匹配操作内容或操作人账号/姓名）
         :param page: 页码（从 1 开始）
         :param page_size: 每页数量
+        :param tenant_id: 所属租户 ID
         :return: {total, page, page_size, items}
         """
         stmt = (
             select(OperationLog, User.username, User.name, User.role)
             .outerjoin(User, User.id == OperationLog.operator_id)
+            .where(OperationLog.tenant_id == tenant_id)
             .order_by(OperationLog.id.desc())
         )
         if keyword:

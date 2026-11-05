@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id
 from app.models import Category, Member, Order, OrderItem, Product
 from app.schemas.report_daily_out import ReportDailyOut
 from app.schemas.report_hourly_out import ReportHourlyOut
@@ -35,17 +36,19 @@ def _window(start: date, end: date) -> tuple[datetime, datetime]:
     return datetime.combine(start, time.min), datetime.combine(end + timedelta(days=1), time.min)
 
 
-def _paid_orders(db: Session, start: datetime, end: datetime) -> list[Order]:
-    """查询时间窗口内已结算的订单。
+def _paid_orders(db: Session, start: datetime, end: datetime, store_id: int) -> list[Order]:
+    """查询时间窗口内已结算的订单（限定当前门店）。
 
     :param db: 数据库会话
     :param start: 开始时间
     :param end: 结束时间（不含）
+    :param store_id: 门店 ID
     :return: 订单列表
     """
     return list(
         db.scalars(
             select(Order).where(
+                Order.store_id == store_id,
                 Order.status == "paid",
                 Order.created_at >= start,
                 Order.created_at < end,
@@ -54,12 +57,13 @@ def _paid_orders(db: Session, start: datetime, end: datetime) -> list[Order]:
     )
 
 
-def _item_amount_rows(db: Session, start: datetime, end: datetime):
-    """查询时间窗口内的订单明细，附带商品、分类与订单信息。
+def _item_amount_rows(db: Session, start: datetime, end: datetime, store_id: int):
+    """查询时间窗口内的订单明细，附带商品、分类与订单信息（限定当前门店）。
 
     :param db: 数据库会话
     :param start: 开始时间
     :param end: 结束时间（不含）
+    :param store_id: 门店 ID
     :return: (订单明细, 商品, 分类, 订单) 结果行列表
     """
     stmt = (
@@ -68,6 +72,7 @@ def _item_amount_rows(db: Session, start: datetime, end: datetime):
         .outerjoin(Product, Product.id == OrderItem.product_id)
         .outerjoin(Category, Category.id == Product.category_id)
         .where(
+            Order.store_id == store_id,
             Order.status == "paid",
             Order.created_at >= start,
             Order.created_at < end,
@@ -76,15 +81,16 @@ def _item_amount_rows(db: Session, start: datetime, end: datetime):
     return db.execute(stmt).all()
 
 
-def _item_share_rows(db: Session, start: datetime, end: datetime):
+def _item_share_rows(db: Session, start: datetime, end: datetime, store_id: int):
     """查询订单明细，并按订单实收金额分摊满减等整单优惠。
 
     :param db: 数据库会话
     :param start: 开始时间
     :param end: 结束时间（不含）
+    :param store_id: 门店 ID
     :return: [(订单明细, 商品, 分类, 分摊后销售额)] 列表
     """
-    rows = _item_amount_rows(db, start, end)
+    rows = _item_amount_rows(db, start, end, store_id)
     # 每个订单的明细金额合计，用于计算整单优惠分摊比例
     order_sums: dict[int, float] = defaultdict(float)
     for item, _product, _category, order in rows:
@@ -116,10 +122,11 @@ def daily_report(
     end: date,
     mode: str = Query("day", pattern="day|week"),
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
-    """销售日报月报：返回区间汇总与按日/按周趋势。"""
+    """销售日报月报：返回区间汇总与按日/按周趋势（当前门店）。"""
     begin, finish = _window(start, end)
-    orders = _paid_orders(db, begin, finish)
+    orders = _paid_orders(db, begin, finish, store_id)
 
     # 区间汇总
     sales = round(sum(o.total_amount for o in orders), 2)
@@ -130,6 +137,7 @@ def daily_report(
         select(func.coalesce(func.sum(OrderItem.weight_kg), 0))
         .join(Order, Order.id == OrderItem.order_id)
         .where(
+            Order.store_id == store_id,
             Order.status == "paid",
             Order.created_at >= begin,
             Order.created_at < finish,
@@ -143,6 +151,7 @@ def daily_report(
             select(func.count(func.distinct(OrderItem.order_id)))
             .join(Order, Order.id == OrderItem.order_id)
             .where(
+                Order.store_id == store_id,
                 Order.status == "paid",
                 Order.created_at >= begin,
                 Order.created_at < finish,
@@ -192,10 +201,11 @@ def product_rank(
     end: date,
     limit: int = Query(15, ge=1, le=100),
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
-    """商品销售排行：按销售额倒序返回 Top N。"""
+    """商品销售排行：按销售额倒序返回 Top N（当前门店）。"""
     begin, finish = _window(start, end)
-    rows = _item_share_rows(db, begin, finish)
+    rows = _item_share_rows(db, begin, finish, store_id)
 
     # 按商品聚合：商品 ID 缺失时按名称聚合
     agg: dict[object, dict] = {}
@@ -238,10 +248,15 @@ def product_rank(
 
 
 @router.get("/hourly", response_model=ReportHourlyOut)
-def hourly_report(start: date, end: date, db: Session = Depends(get_db)):
-    """时段分析：逐小时销售额曲线与早/午/晚高峰汇总。"""
+def hourly_report(
+    start: date,
+    end: date,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """时段分析：逐小时销售额曲线与早/午/晚高峰汇总（当前门店）。"""
     begin, finish = _window(start, end)
-    orders = _paid_orders(db, begin, finish)
+    orders = _paid_orders(db, begin, finish, store_id)
 
     buckets: dict[int, list[float]] = defaultdict(lambda: [0.0, 0])
     for order in orders:
@@ -276,10 +291,15 @@ def hourly_report(start: date, end: date, db: Session = Depends(get_db)):
 
 
 @router.get("/profit", response_model=ReportProfitOut)
-def profit_report(start: date, end: date, db: Session = Depends(get_db)):
-    """毛利分析：按分类统计销售额、成本与毛利。"""
+def profit_report(
+    start: date,
+    end: date,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """毛利分析：按分类统计销售额、成本与毛利（当前门店）。"""
     begin, finish = _window(start, end)
-    rows = _item_share_rows(db, begin, finish)
+    rows = _item_share_rows(db, begin, finish, store_id)
 
     agg: dict[str, dict] = {}
     for item, product, category, share in rows:
@@ -323,23 +343,29 @@ def member_report(
     end: date,
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
-    """会员分析：会员规模、消费贡献、复购率与消费排行。"""
+    """会员分析：会员规模、消费贡献、复购率与消费排行（当前门店）。"""
     begin, finish = _window(start, end)
-    orders = _paid_orders(db, begin, finish)
+    orders = _paid_orders(db, begin, finish, store_id)
 
     # 全部销售与会员销售
     total_sales = sum(o.total_amount for o in orders)
     member_orders = [o for o in orders if o.member_id is not None]
     member_sales = sum(o.total_amount for o in member_orders)
 
-    # 会员规模与区间新增
-    member_total = int(db.scalar(select(func.count()).select_from(Member)) or 0)
+    # 会员规模与区间新增（当前门店）
+    member_total = int(
+        db.scalar(
+            select(func.count()).select_from(Member).where(Member.store_id == store_id)
+        )
+        or 0
+    )
     new_in_range = int(
         db.scalar(
             select(func.count())
             .select_from(Member)
-            .where(Member.created_at >= begin, Member.created_at < finish)
+            .where(Member.store_id == store_id, Member.created_at >= begin, Member.created_at < finish)
         )
         or 0
     )
