@@ -136,11 +136,27 @@ def daily_report(
             OrderItem.is_weighted.is_(True),
         )
     )
+
+    # 称重订单数：含称重商品明细的订单去重计数
+    weighted_orders = int(
+        db.scalar(
+            select(func.count(func.distinct(OrderItem.order_id)))
+            .join(Order, Order.id == OrderItem.order_id)
+            .where(
+                Order.status == "paid",
+                Order.created_at >= begin,
+                Order.created_at < finish,
+                OrderItem.is_weighted.is_(True),
+            )
+        )
+        or 0
+    )
     summary = ReportSalesSummary(
         sales=sales,
         orders=order_count,
         avg_price=avg_price,
         weight_kg=round(float(weight or 0), 2),
+        weighted_orders=weighted_orders,
     )
 
     # 趋势分组：按日或按 ISO 周

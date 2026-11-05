@@ -26,7 +26,12 @@ query = {"start": start, "end": end}
 r = client.get("/api/reports/daily", params=query)
 check("日报接口可用", r.status_code == 200, r.text)
 daily = r.json()
-check("日报汇总字段完整", set(daily["summary"].keys()) == {"sales", "orders", "avg_price", "weight_kg"})
+check(
+    "日报汇总字段完整",
+    set(daily["summary"].keys())
+    == {"sales", "orders", "avg_price", "weight_kg", "weighted_orders"},
+)
+check("称重订单数不超过订单数", daily["summary"]["weighted_orders"] <= daily["summary"]["orders"])
 check("日报客单价计算正确", abs(daily["summary"]["avg_price"] - round(daily["summary"]["sales"] / daily["summary"]["orders"], 2)) < 0.01)
 check("趋势合计等于销售额", abs(sum(p["sales"] for p in daily["trend"]) - daily["summary"]["sales"]) < 0.05)
 
