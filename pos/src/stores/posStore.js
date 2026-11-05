@@ -10,6 +10,7 @@ const LS_PROMOTIONS = 'pos_promotions' // 生效促销本地缓存
 const LS_CART = 'pos_cart' // 购物车本地缓存
 const LS_HANG = 'pos_hang_orders' // 挂单本地缓存
 const LS_OFFLINE = 'pos_offline_orders' // 待上传订单队列
+const LS_CASHIER = 'pos_cashier' // 已登录收银员（重启后保持登录）
 
 /**
  * 从 localStorage 读取 JSON，解析失败返回默认值
@@ -34,8 +35,8 @@ export const usePosStore = defineStore('pos', {
     syncState: 'idle',
     syncError: '',
     lastSyncTime: null,
-    // 当前收银员
-    cashier: null,
+    // 当前收银员（从本地缓存恢复，退出登录后清空）
+    cashier: loadLS(LS_CASHIER, null),
     // 当前识别的会员（null 表示散客）
     member: null,
     // 当前生效的促销规则
@@ -136,10 +137,22 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 设置当前收银员
+     * 设置当前收银员（同时写入本地缓存，应用重启后保持登录）
+     * @param {object} user 收银员信息
      */
     setCashier(user) {
       this.cashier = user
+      localStorage.setItem(LS_CASHIER, JSON.stringify(user))
+    },
+
+    /**
+     * 退出登录：清空收银员、会员与购物车，避免下一位收银员沿用上一班数据
+     */
+    clearCashier() {
+      this.cashier = null
+      this.member = null
+      this.clearCart()
+      localStorage.removeItem(LS_CASHIER)
     },
 
     /**

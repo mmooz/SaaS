@@ -6,6 +6,7 @@
         <div class="store-name">鲜果超市 · 1号收银台</div>
         <div class="header-meta">
           <span class="shift-chip">早班 · 08:00 接班</span>
+          <span class="shift-chip">{{ cashierName }}</span>
           <span class="sync-chip" :class="syncClass">{{ syncText }}</span>
         </div>
       </div>
@@ -16,6 +17,7 @@
         <el-button size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
         <el-button size="large" @click="$router.push('/settings')"><el-icon><Setting /></el-icon></el-button>
+        <el-button size="large" @click="logout"><el-icon><SwitchButton /></el-icon>&nbsp;退出</el-button>
       </div>
     </header>
 
@@ -232,7 +234,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
-  Search, Printer, RefreshLeft, Switch, Setting, Folder,
+  Search, Printer, RefreshLeft, Switch, Setting, Folder, SwitchButton,
 } from '@element-plus/icons-vue'
 import { usePosStore } from '../stores/posStore'
 import { PrintService } from '../services/print/PrintService'
@@ -242,6 +244,16 @@ import { createMember, fetchMemberByMobile } from '../api'
 
 const router = useRouter()
 const store = usePosStore()
+
+// 当前登录收银员名称（未登录时显示提示）
+const cashierName = computed(() => (store.cashier ? store.cashier.name : '未登录'))
+
+// 退出登录：清空收银员会话并返回登录页
+const logout = () => {
+  store.clearCashier()
+  ElMessage.success('已退出登录')
+  router.push('/login')
+}
 
 /* ---------- 演示兜底数据（后端无数据时使用） ---------- */
 const fallbackProducts = [
