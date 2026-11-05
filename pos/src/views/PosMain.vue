@@ -128,6 +128,11 @@
             <button class="pay-btn blue2" @click="openPay('支付宝')">📱 支付宝</button>
             <button class="pay-btn orange" @click="openPay('储值')">💳 储值</button>
           </div>
+          <div class="print-row">
+            <el-checkbox v-model="autoPrint" size="large" @change="saveAutoPrint">
+              结算后自动打印小票 / 标签
+            </el-checkbox>
+          </div>
           <button class="settle-btn" :disabled="store.cart.length === 0" @click="settle">
             结 算（F9）
           </button>
@@ -185,6 +190,8 @@ import {
   Search, Printer, RefreshLeft, Switch, Setting, Folder,
 } from '@element-plus/icons-vue'
 import { usePosStore } from '../stores/posStore'
+import { PrintService } from '../services/print/PrintService'
+import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
 
 const router = useRouter()
 const store = usePosStore()
@@ -363,7 +370,15 @@ const openPay = (method) => {
   payDialog.value = true
 }
 
-// 确认收款：上传订单到服务端，失败则离线保存
+// 结算后自动打印（本地持久化，默认开启）
+const autoPrint = ref(localStorage.getItem('pos_auto_print') !== '0')
+
+// 保存自动打印开关
+const saveAutoPrint = (value) => {
+  localStorage.setItem('pos_auto_print', value ? '1' : '0')
+}
+
+// 确认收款：上传订单到服务端，失败则离线保存；成功后按设置自动打印
 const confirmPay = async () => {
   if (payMethod.value === '现金') {
     const rec = parseFloat(cashReceived.value)
@@ -376,15 +391,31 @@ const confirmPay = async () => {
     ElMessage.warning('请输入会员手机号')
     return
   }
+  // 结算前快照，用于结算后打印（settle 会清空购物车）
+  const meta = {
+    cashierName: store.cashier ? store.cashier.name : '',
+    payMethod: payMethod.value,
+    cashReceived: payMethod.value === '现金' ? parseFloat(cashReceived.value) : undefined,
+    change: payMethod.value === '现金' ? changeAmount.value : undefined,
+    memberMobile: memberMobile.value,
+  }
   const weightedCount = store.cart.filter((i) => i.weighted).length
+  // 结算会清空购物车，先记录应收金额用于提示文案
+  const total = store.totalAmount
   payDialog.value = false
-  const ok = await store.settle({ payMethod: payMethod.value, memberId: null })
-  if (ok) {
+  const result = await store.settle({ payMethod: payMethod.value, memberId: null })
+  if (result.ok) {
     ElMessage.success(
-      `收款成功 ¥${store.totalAmount.toFixed(2)} · 已上传订单${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,
+      `收款成功 ¥${total.toFixed(2)} · 已上传订单${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,
     )
   } else {
     ElMessage.warning('网络异常，订单已本地保存，联网后自动上传')
+  }
+  // 自动打印：先小票（现金含实收/找零），再打印称重标签
+  if (autoPrint.value && result.order) {
+    const printOrder = OrderPrintMapper.fromSettle(result, meta)
+    PrintService.printReceipt(printOrder)
+    setTimeout(() => PrintService.printLabels(printOrder), 1200)
   }
   cashReceived.value = ''
   memberMobile.value = ''

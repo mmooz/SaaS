@@ -193,7 +193,7 @@ export const usePosStore = defineStore('pos', {
     /**
      * 结算：生成订单号并上传服务端；失败则进入离线队列
      * @param {object} payload { payMethod, cashReceived, memberId, remark }
-     * @returns {Promise<boolean>} 是否上传成功
+     * @returns {Promise<{ok:boolean, orderNo:string, order:object}>} 上传结果与本次订单数据
      */
     async settle(payload) {
       const orderNo = this.buildOrderNo()
@@ -220,13 +220,13 @@ export const usePosStore = defineStore('pos', {
       try {
         await uploadOrder(order)
         this.clearCart()
-        return true
+        return { ok: true, orderNo, order }
       } catch (err) {
         // 上传失败：进入离线队列，本地保留待重传
         this.offlineOrders.push(order)
         localStorage.setItem(LS_OFFLINE, JSON.stringify(this.offlineOrders))
         this.clearCart()
-        return false
+        return { ok: false, orderNo, order }
       }
     },
 
