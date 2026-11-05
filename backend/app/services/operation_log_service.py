@@ -12,7 +12,11 @@ class OperationLogService:
 
     @staticmethod
     def record(
-        db: Session, action: str, detail: str | None = None, operator_id: int | None = None
+        db: Session,
+        action: str,
+        detail: str | None = None,
+        operator_id: int | None = None,
+        tenant_id: int | None = None,
     ) -> None:
         """写入一条操作日志（不提交事务，由调用方统一提交）。
 
@@ -20,8 +24,18 @@ class OperationLogService:
         :param action: 操作动作（如 登录/退款/交班/批量改价）
         :param detail: 操作详情
         :param operator_id: 操作人用户 ID
+        :param tenant_id: 所属租户 ID（多租户隔离用）
         """
-        db.add(OperationLog(operator_id=operator_id, action=action, detail=detail))
+        if tenant_id is None:
+            raise ValueError("多租户模式下操作日志必须指定 tenant_id")
+        db.add(
+            OperationLog(
+                operator_id=operator_id,
+                action=action,
+                detail=detail,
+                tenant_id=tenant_id,
+            )
+        )
 
     @staticmethod
     def list_logs(

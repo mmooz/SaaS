@@ -12,6 +12,8 @@ class UserOut(BaseModel):
 
     # 用户 ID
     id: SnowflakeId
+    # 所属租户 ID
+    tenant_id: SnowflakeId
     # 登录账号（工号）
     username: str
     # 姓名

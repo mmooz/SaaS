@@ -6,9 +6,10 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.models import User
+from app.models import Store, User, UserStore
 from app.schemas.login_request import LoginRequest
 from app.schemas.login_response import LoginResponse
+from app.schemas.store_out import StoreOut
 from app.schemas.user_out import UserOut
 from app.services.password_hasher import PasswordHasher
 from app.services.operation_log_service import OperationLogService
@@ -30,10 +31,10 @@ def _current_user(db: Session, authorization: str | None) -> User:
     """
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="请先登录")
-    user_id = token_service.verify(authorization[7:].strip())
-    if user_id is None:
+    payload = token_service.verify(authorization[7:].strip())
+    if payload is None:
         raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
-    user = db.get(User, user_id)
+    user = db.get(User, payload["user_id"])
     if not user or not user.enabled:
         raise HTTPException(status_code=401, detail="账号不存在或已停用")
     return user
@@ -41,7 +42,7 @@ def _current_user(db: Session, authorization: str | None) -> User:
 
 @router.post("/login", response_model=LoginResponse)
 def login(data: LoginRequest, db: Session = Depends(get_db)):
-    """账号密码登录：校验通过后签发令牌并返回用户信息。"""
+    """账号密码登录：校验通过后签发令牌并返回用户信息与可访问门店。"""
     user = db.scalar(select(User).where(User.username == data.username.strip()))
     # 账号不存在与密码错误统一提示，避免暴露账号是否存在
     if not user or not PasswordHasher.verify(data.password, user.password_hash):
@@ -49,13 +50,23 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     # 停用账号禁止登录
     if not user.enabled:
         raise HTTPException(status_code=403, detail="账号已停用，请联系管理员")
+    # 查询用户可访问的门店列表
+    store_ids = db.scalars(
+        select(UserStore.store_id).where(UserStore.user_id == user.id)
+    ).all()
+    stores = (
+        db.scalars(select(Store).where(Store.id.in_(store_ids))).all() if store_ids else []
+    )
     # 记录登录日志
-    OperationLogService.record(db, "登录", f"用户 {user.username} 登录成功", user.id)
+    OperationLogService.record(
+        db, "登录", f"用户 {user.username} 登录成功", user.id, tenant_id=user.tenant_id
+    )
     db.commit()
     return LoginResponse(
-        access_token=token_service.issue(user.id),
+        access_token=token_service.issue(user.id, user.tenant_id),
         expires_in=token_service.expire_seconds,
         user=UserOut.model_validate(user),
+        stores=[StoreOut.model_validate(s) for s in stores],
     )
 
 

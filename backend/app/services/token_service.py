@@ -21,21 +21,26 @@ class TokenService:
         # 令牌有效期（秒）
         self.expire_seconds = expire_hours * 3600
 
-    def issue(self, user_id: int) -> str:
-        """为用户签发令牌。
+    def issue(self, user_id: int, tenant_id: int) -> str:
+        """为用户签发令牌，载荷携带用户 ID 与所属租户 ID。
 
         :param user_id: 用户 ID
+        :param tenant_id: 所属租户 ID
         :return: 令牌字符串（载荷.签名）
         """
-        payload = {"uid": user_id, "exp": int(time.time()) + self.expire_seconds}
+        payload = {
+            "uid": user_id,
+            "tid": tenant_id,
+            "exp": int(time.time()) + self.expire_seconds,
+        }
         body = self._encode(json.dumps(payload, separators=(",", ":")))
         return f"{body}.{self._sign(body)}"
 
-    def verify(self, token: str) -> int | None:
-        """校验令牌并取出用户 ID。
+    def verify(self, token: str) -> dict | None:
+        """校验令牌并取出用户 ID 与租户 ID。
 
         :param token: 待校验令牌
-        :return: 校验通过返回用户 ID；签名错误、格式错误或已过期返回 None
+        :return: 校验通过返回 {"user_id":..., "tenant_id":...}；签名错误、格式错误或已过期返回 None
         """
         try:
             body, signature = token.split(".")
@@ -51,7 +56,10 @@ class TokenService:
         if int(payload.get("exp", 0)) < int(time.time()):
             return None
         user_id = payload.get("uid")
-        return int(user_id) if isinstance(user_id, int) else None
+        tenant_id = payload.get("tid")
+        if not isinstance(user_id, int) or not isinstance(tenant_id, int):
+            return None
+        return {"user_id": user_id, "tenant_id": tenant_id}
 
     def _sign(self, body: str) -> str:
         """对载荷做 HMAC-SHA256 签名。
