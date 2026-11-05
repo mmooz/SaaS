@@ -664,7 +664,7 @@ onBeforeUnmount(() => {
 .pos-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 1.15fr 0.95fr;
+  grid-template-columns: 1fr 0.5fr 0.5fr;
   gap: 12px;
   padding: 12px;
   min-height: 0;
