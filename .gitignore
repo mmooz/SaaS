@@ -4,6 +4,7 @@ dist/
 .vite/
 # Rust / Tauri 构建产物
 target/
+pos/src-tauri/gen/
 
 # 后端环境与本地数据库
 backend/.venv/
