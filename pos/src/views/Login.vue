@@ -79,6 +79,12 @@ const cashiers = [
   { id: 3, no: 'A1003', name: '收银员 小张', avatar: '🥬' },
 ]
 
+// 登录成功后跳转：优先回到被路由守卫拦截的目标页
+const goAfterLogin = () => {
+  const target = router.currentRoute.value.query.redirect
+  router.push(typeof target === 'string' && target.startsWith('/') ? target : '/')
+}
+
 // 表单登录：校验工号与密码后进入收银台
 const doLogin = () => {
   if (!form.username.trim() || !form.password.trim()) {
@@ -88,7 +94,7 @@ const doLogin = () => {
   // 记录当前收银员（演示：用户名即身份，S6 对接真实登录接口）
   store.setCashier({ id: 1, no: 'A1001', name: form.username, role: 'cashier' })
   ElMessage.success(`欢迎回来，${form.username}`)
-  router.push('/')
+  goAfterLogin()
 }
 
 // 快捷登录：点击头像一键进入收银台
@@ -96,7 +102,7 @@ const quickLogin = (c) => {
   // 记录当前收银员，结算时随订单上传
   store.setCashier({ id: c.id, no: c.no, name: c.name, role: 'cashier' })
   ElMessage.success(`${c.name} 登录成功`)
-  router.push('/')
+  goAfterLogin()
 }
 </script>
 

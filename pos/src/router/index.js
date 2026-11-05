@@ -45,9 +45,30 @@ const router = createRouter({
   routes,
 })
 
-// 路由守卫：设置页面标题
+/**
+ * 读取本地保存的登录收银员信息（与 posStore 使用同一键名）
+ * @returns {object|null} 收银员信息，未登录时为 null
+ */
+function loadCashier() {
+  try {
+    return JSON.parse(localStorage.getItem('pos_cashier') || 'null')
+  } catch {
+    return null
+  }
+}
+
+// 路由守卫：设置页面标题；未登录时拦截到登录页
 router.beforeEach((to) => {
   document.title = `${to.meta.title || '收银台'} · 鲜衡 POS`
+  const cashier = loadCashier()
+  // 未登录只允许停留在登录页，登录后回到原目标页
+  if (!cashier && to.name !== 'Login') {
+    return { name: 'Login', query: { redirect: to.fullPath } }
+  }
+  // 已登录时不再展示登录页（需切换收银员请先退出登录）
+  if (cashier && to.name === 'Login') {
+    return { name: 'PosMain' }
+  }
   return true
 })
 
