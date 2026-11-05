@@ -241,6 +241,7 @@ import { PrintService } from '../services/print/PrintService'
 import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
 import { LabelCode } from '../services/print/LabelCode'
 import { createMember, fetchMemberByMobile } from '../api'
+import { TauriScaleService } from '../services/scale/TauriScaleService'
 
 const router = useRouter()
 const store = usePosStore()
@@ -375,16 +376,35 @@ const handleScan = () => {
   ElMessage.warning('未找到对应商品或标签码')
 }
 
-/* ---------- 称重模拟（模拟秤） ---------- */
+/* ---------- 电子秤接入（原生串口/网口，浏览器降级模拟秤） ---------- */
 const weight = ref(0)
 const weightStable = ref(false)
 const manualWeight = ref(false)
 const tareOffset = ref(0)
-const scaleOnline = ref(true)
+const scaleOnline = ref(false)
+// 是否已连接原生秤（false 时使用本地模拟称重）
+const nativeScale = ref(false)
+
+/**
+ * 读取本地保存的秤设置
+ * @returns {object} 秤设置（connectMode/comPort/baudRate/stableCount/autoConfirm 等）
+ */
+const loadScaleSettings = () => {
+  try {
+    const raw = localStorage.getItem('pos_settings')
+    const data = raw ? JSON.parse(raw) : null
+    return data?.scale || {}
+  } catch {
+    return {}
+  }
+}
+
+// 当前生效的秤设置（连接与稳定判定使用）
+const scaleSettings = loadScaleSettings()
 
 const weightDisplay = computed(() => {
   if (manualWeight.value) return '0.00'
-  return (weight.value - tareOffset.value).toFixed(2)
+  return weight.value.toFixed(2)
 })
 const weightUnit = computed(() => (currentProduct.value ? 'kg' : ''))
 const scaleStable = computed(() => weightStable.value)
@@ -392,38 +412,76 @@ const scaleStable = computed(() => weightStable.value)
 let weighTimer = null
 let stableCount = 0
 let prevWeight = 0
+// 原生秤读取中标记，避免异步读取重叠
+let reading = false
+// 模拟秤毛重（去皮偏移在其上扣减）
+let simGross = 0
 
-// 开始模拟称重：重量渐增至固定目标后小幅抖动，连续稳定判定
+/**
+ * 稳定判定：连续 N 次读数变化小于阈值即视为稳定，并按设置自动入单
+ * @param {number} cur 当前净重 kg
+ */
+const updateStability = (cur) => {
+  const delta = Math.abs(cur - prevWeight)
+  prevWeight = cur
+  if (delta < 0.02 && cur > 0.05) {
+    stableCount += 1
+  } else {
+    stableCount = 0
+  }
+  const need = Math.max(1, Number(scaleSettings.stableCount) || 3)
+  if (stableCount >= need) {
+    weightStable.value = true
+    if (scaleSettings.autoConfirm !== false && cur > 0.01) confirmWeight()
+  }
+}
+
+/**
+ * 读取原生秤重量（串口/网口/内置模拟秤）
+ * @returns {Promise<void>}
+ */
+const readNativeWeight = async () => {
+  if (reading) return
+  reading = true
+  try {
+    const value = await TauriScaleService.readWeight()
+    weight.value = Math.max(0, Number(value) || 0)
+    updateStability(weight.value)
+  } catch {
+    // 未读到有效帧时保持上次重量，等待下一帧
+  } finally {
+    reading = false
+  }
+}
+
+// 开始称重：已连接原生秤时读取真实重量，否则使用本地模拟
 const startWeighing = () => {
   stopWeighing()
   weight.value = 0
   weightStable.value = false
+  manualWeight.value = false
   stableCount = 0
+  prevWeight = 0
   tareOffset.value = 0
-  // 固定目标重量：仅在称重开始时随机一次，之后重量向该目标收敛
+  simGross = 0
+  if (nativeScale.value) {
+    weighTimer = setInterval(readNativeWeight, 250)
+    return
+  }
+  // 模拟秤：毛重渐增至固定目标后小幅抖动
   const target = 0.5 + Math.random() * 0.8
   weighTimer = setInterval(() => {
-    if (weight.value < target) {
-      weight.value = Math.min(target, weight.value + 0.2 + Math.random() * 0.25)
+    if (simGross < target) {
+      simGross = Math.min(target, simGross + 0.2 + Math.random() * 0.25)
     } else {
-      weight.value = target + (Math.random() - 0.5) * 0.01
+      simGross = target + (Math.random() - 0.5) * 0.01
     }
-    const cur = weight.value - tareOffset.value
-    const delta = Math.abs(cur - prevWeight)
-    prevWeight = cur
-    if (delta < 0.02 && cur > 0.05) {
-      stableCount += 1
-    } else {
-      stableCount = 0
-    }
-    if (stableCount >= 3) {
-      weightStable.value = true
-      if (weight.value > 0.01) confirmWeight()
-    }
+    weight.value = Math.max(0, simGross - tareOffset.value)
+    updateStability(weight.value)
   }, 260)
 }
 
-// 停止模拟称重
+// 停止称重轮询
 const stopWeighing = () => {
   if (weighTimer) clearInterval(weighTimer)
   weighTimer = null
@@ -431,7 +489,7 @@ const stopWeighing = () => {
 
 // 稳定后确认：入购物车
 const confirmWeight = () => {
-  const net = weight.value - tareOffset.value
+  const net = weight.value
   if (net <= 0.001 || !currentProduct.value) return
   const p = currentProduct.value
   store.confirmWeighted(p, net)
@@ -440,15 +498,39 @@ const confirmWeight = () => {
   currentProduct.value = null
 }
 
-// 去皮/置零
-const doTare = () => {
-  tareOffset.value = weight.value
+// 去皮
+const doTare = async () => {
   weightStable.value = false
+  if (nativeScale.value) {
+    try {
+      await TauriScaleService.tare()
+      weight.value = 0
+    } catch (err) {
+      ElMessage.error(`去皮失败：${err.message}`)
+      return
+    }
+  } else {
+    // 模拟秤：以当前毛重作为皮重
+    tareOffset.value = simGross
+    weight.value = 0
+  }
   ElMessage.success('已去皮')
 }
-const doZero = () => {
+
+// 置零
+const doZero = async () => {
+  if (nativeScale.value) {
+    try {
+      await TauriScaleService.zero()
+    } catch (err) {
+      ElMessage.error(`置零失败：${err.message}`)
+      return
+    }
+  }
   tareOffset.value = 0
+  simGross = 0
   weight.value = 0
+  weightStable.value = false
   ElMessage.success('已置零')
 }
 
@@ -651,10 +733,45 @@ const onKeydown = (e) => {
   }
 }
 
+/**
+ * 连接电子秤：桌面壳内按设置连接串口/网口秤，浏览器环境降级为模拟秤
+ * @returns {Promise<void>}
+ */
+const connectScale = async () => {
+  if (!TauriScaleService.isAvailable()) {
+    nativeScale.value = false
+    scaleOnline.value = true
+    return
+  }
+  // 页面设置中网络模式对应 tcp，模拟秤对应 mock
+  const connection = scaleSettings.connectMode === 'serial'
+    ? 'serial'
+    : scaleSettings.connectMode === 'network'
+      ? 'tcp'
+      : 'mock'
+  try {
+    const tcpAddr = `${scaleSettings.scaleIp || '192.168.1.100'}:${scaleSettings.scalePort || 5000}`
+    await TauriScaleService.connect({
+      connection,
+      portName: scaleSettings.comPort,
+      baudRate: scaleSettings.baudRate,
+      tcpAddr,
+    })
+    nativeScale.value = true
+    scaleOnline.value = await TauriScaleService.isConnected()
+  } catch (err) {
+    nativeScale.value = false
+    scaleOnline.value = false
+    ElMessage.warning(`电子秤连接失败，已降级为模拟称重：${err.message}`)
+  }
+}
+
 onMounted(() => {
   updateClock()
   setInterval(updateClock, 1000)
   window.addEventListener('keydown', onKeydown)
+  // 连接电子秤（失败时使用模拟称重，不阻塞收银）
+  connectScale()
   // 启动时同步商品数据（失败不阻塞，使用本地缓存/演示数据）
   store.syncProducts()
 })

@@ -34,15 +34,27 @@
                 <el-option label="模拟秤" value="sim" />
               </el-select>
             </el-form-item>
-            <el-form-item label="COM 口">
+            <el-form-item v-if="scaleForm.connectMode === 'serial'" label="COM 口">
               <el-select v-model="scaleForm.comPort" size="large" class="set-input">
                 <el-option v-for="p in comPorts" :key="p" :label="p" :value="p" />
               </el-select>
             </el-form-item>
-            <el-form-item label="波特率">
+            <el-form-item v-if="scaleForm.connectMode === 'serial'" label="波特率">
               <el-select v-model="scaleForm.baudRate" size="large" class="set-input">
                 <el-option v-for="b in baudRates" :key="b" :label="String(b)" :value="b" />
               </el-select>
+            </el-form-item>
+            <el-form-item v-if="scaleForm.connectMode === 'network'" label="秤 IP 地址">
+              <el-input v-model="scaleForm.scaleIp" size="large" class="set-input" placeholder="如 192.168.1.100" />
+            </el-form-item>
+            <el-form-item v-if="scaleForm.connectMode === 'network'" label="秤端口">
+              <el-input v-model="scaleForm.scalePort" size="large" class="set-input" placeholder="如 5000" />
+            </el-form-item>
+            <el-form-item label="连接测试">
+              <el-button class="big-btn" :loading="testingScale" @click="testScale">
+                <el-icon><Odometer /></el-icon>&nbsp;连接并读取重量
+              </el-button>
+              <span v-if="scaleTestTip" class="field-tip">{{ scaleTestTip }}</span>
             </el-form-item>
             <el-form-item label="稳定自动确认">
               <el-switch v-model="scaleForm.autoConfirm" size="large" />
@@ -243,6 +255,7 @@ import { ElMessage } from 'element-plus'
 import { ArrowLeft, Check, Odometer, Printer, Refresh, Shop } from '@element-plus/icons-vue'
 import { PrintService } from '../services/print/PrintService'
 import { TauriPrintService } from '../services/print/TauriPrintService'
+import { TauriScaleService } from '../services/scale/TauriScaleService'
 
 /** 设置项在 localStorage 中的键名 */
 const SETTINGS_KEY = 'pos_settings'
@@ -256,14 +269,19 @@ const menus = [
   { key: 'sync', label: '同步状态', icon: Refresh },
 ]
 
-// 称重设置表单（模拟数据；connectMode: serial=串口 network=网口 sim=模拟秤）
+// 称重设置表单（connectMode: serial=串口 network=网口 sim=模拟秤）
 const scaleForm = reactive({
   connectMode: 'sim',
   comPort: 'COM3',
   baudRate: 9600,
+  scaleIp: '192.168.1.100',
+  scalePort: '5000',
   autoConfirm: true,
   stableCount: 3,
 })
+// 秤连接测试状态与提示
+const testingScale = ref(false)
+const scaleTestTip = ref('')
 const comPorts = ['COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8']
 const baudRates = [9600, 4800]
 
@@ -349,6 +367,41 @@ const refreshPrinterStatus = async () => {
     } catch {
       tip.value = '状态：打印机不存在或读取失败'
     }
+  }
+}
+
+/**
+ * 测试秤连接：按当前表单参数连接并读取一次重量（无需先保存）
+ * @returns {Promise<void>}
+ */
+const testScale = async () => {
+  if (!TauriScaleService.isAvailable()) {
+    scaleTestTip.value = '当前为浏览器环境，连接测试需在桌面客户端中执行'
+    ElMessage.warning(scaleTestTip.value)
+    return
+  }
+  testingScale.value = true
+  scaleTestTip.value = ''
+  try {
+    const connection = scaleForm.connectMode === 'serial'
+      ? 'serial'
+      : scaleForm.connectMode === 'network'
+        ? 'tcp'
+        : 'mock'
+    await TauriScaleService.connect({
+      connection,
+      portName: scaleForm.comPort,
+      baudRate: scaleForm.baudRate,
+      tcpAddr: `${scaleForm.scaleIp}:${scaleForm.scalePort}`,
+    })
+    const weight = await TauriScaleService.readWeight()
+    scaleTestTip.value = `连接成功，当前重量 ${Number(weight).toFixed(2)} kg`
+    ElMessage.success(scaleTestTip.value)
+  } catch (err) {
+    scaleTestTip.value = `连接失败：${err.message}`
+    ElMessage.error(scaleTestTip.value)
+  } finally {
+    testingScale.value = false
   }
 }
 
