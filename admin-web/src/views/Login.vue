@@ -45,7 +45,7 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { login, setAdminToken, setStores, setCurrentStore } from '../api'
+import { login, setAdminToken, setStores, setCurrentStore, setUserInfo } from '../api'
 
 const router = useRouter()
 
@@ -70,20 +70,23 @@ const handleLogin = async () => {
   loading.value = true
   try {
     const res = await login(form.username, form.password)
-    // 仅店长/管理员可进入后台
-    if (!['admin', 'manager'].includes(res.user.role)) {
+    // 平台超级管理员或店长/租户管理员可进入后台
+    if (!['super', 'admin', 'manager'].includes(res.user.role)) {
       ElMessage.warning('该账号无后台管理权限')
       return
     }
     setAdminToken(res.access_token)
-    // 保存可访问门店列表，默认选中第一个门店
+    // 保存当前用户信息，供菜单与权限判断使用
+    setUserInfo(res.user)
+    // 保存可访问门店列表；超级管理员无门店，不设置当前门店
     const stores = res.stores || []
     setStores(stores)
     if (stores.length > 0) {
       setCurrentStore(stores[0].id)
     }
     ElMessage.success(`欢迎回来，${res.user.name}`)
-    router.push('/dashboard')
+    // 超级管理员进入租户管理，其他角色进入仪表盘
+    router.push(res.user.role === 'super' ? '/tenants' : '/dashboard')
   } catch (err) {
     ElMessage.error(`登录失败：${err.message}`)
   } finally {

@@ -7,6 +7,43 @@ const TOKEN_KEY = 'admin_token'
 const STORE_KEY = 'admin_store_id'
 // 可访问门店列表缓存键
 const STORES_KEY = 'admin_stores'
+// 当前登录用户信息缓存键
+const USER_KEY = 'admin_user'
+
+/**
+ * 保存当前登录用户信息（用于菜单权限判断）
+ * @param {object} user 用户信息 { id, username, name, role }
+ */
+export function setUserInfo(user) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user || {}))
+}
+
+/**
+ * 读取当前登录用户信息
+ * @returns {object} 用户信息（未登录时为空对象）
+ */
+export function getUserInfo() {
+  try {
+    return JSON.parse(localStorage.getItem(USER_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * 清除当前登录用户信息
+ */
+export function clearUserInfo() {
+  localStorage.removeItem(USER_KEY)
+}
+
+/**
+ * 当前用户是否为平台超级管理员
+ * @returns {boolean} 是超级管理员返回 true
+ */
+export function isSuperAdmin() {
+  return getUserInfo().role === 'super'
+}
 
 /**
  * 保存后台登录令牌
@@ -604,6 +641,45 @@ export function createBackup() {
  */
 export function backupDownloadUrl(name) {
   return `${BASE_URL}/api/backups/${encodeURIComponent(name)}/download`
+}
+
+/* ---------------- 租户管理（平台超级管理员） ---------------- */
+
+/**
+ * 查询租户列表（超级管理员见全部，租户管理员仅见本租户）
+ * @returns {Promise<Array<object>>} 租户列表（含门店数/用户数统计）
+ */
+export function fetchTenants() {
+  return request('/api/tenants')
+}
+
+/**
+ * 新增租户（可同时开通初始管理员与默认门店）
+ * @param {object} data { name, code, enabled, adminUsername, adminPassword, adminName }
+ * @returns {Promise<object>} 租户信息
+ */
+export function createTenant(data) {
+  return request('/api/tenants', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: data.name,
+      code: data.code,
+      enabled: data.enabled ?? true,
+      admin_username: data.adminUsername || null,
+      admin_password: data.adminPassword || null,
+      admin_name: data.adminName || null,
+    }),
+  })
+}
+
+/**
+ * 更新租户信息
+ * @param {number} id 租户 ID
+ * @param {object} data { name, code, enabled }
+ * @returns {Promise<object>} 租户信息
+ */
+export function updateTenant(id, data) {
+  return request(`/api/tenants/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 }
 
 /* ---------------- 订单 ---------------- */

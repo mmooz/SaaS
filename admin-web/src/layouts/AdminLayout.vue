@@ -10,30 +10,35 @@
         </div>
       </div>
       <el-menu :default-active="activeMenu" router class="side-menu">
-        <el-menu-item index="/dashboard">
-          <el-icon><Odometer /></el-icon><span>首页仪表盘</span>
+        <el-menu-item v-if="isSuper" index="/tenants">
+          <el-icon><OfficeBuilding /></el-icon><span>租户管理</span>
         </el-menu-item>
-        <el-menu-item index="/products">
-          <el-icon><Box /></el-icon><span>商品管理</span>
-        </el-menu-item>
-        <el-menu-item index="/categories">
-          <el-icon><FolderOpened /></el-icon><span>分类管理</span>
-        </el-menu-item>
-        <el-menu-item index="/members">
-          <el-icon><Avatar /></el-icon><span>会员管理</span>
-        </el-menu-item>
-        <el-menu-item index="/promotions">
-          <el-icon><PriceTag /></el-icon><span>促销管理</span>
-        </el-menu-item>
-        <el-menu-item index="/inventory">
-          <el-icon><SetUp /></el-icon><span>库存管理</span>
-        </el-menu-item>
-        <el-menu-item index="/reports">
-          <el-icon><DataAnalysis /></el-icon><span>报表中心</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon><span>系统设置</span>
-        </el-menu-item>
+        <template v-if="!isSuper">
+          <el-menu-item index="/dashboard">
+            <el-icon><Odometer /></el-icon><span>首页仪表盘</span>
+          </el-menu-item>
+          <el-menu-item index="/products">
+            <el-icon><Box /></el-icon><span>商品管理</span>
+          </el-menu-item>
+          <el-menu-item index="/categories">
+            <el-icon><FolderOpened /></el-icon><span>分类管理</span>
+          </el-menu-item>
+          <el-menu-item index="/members">
+            <el-icon><Avatar /></el-icon><span>会员管理</span>
+          </el-menu-item>
+          <el-menu-item index="/promotions">
+            <el-icon><PriceTag /></el-icon><span>促销管理</span>
+          </el-menu-item>
+          <el-menu-item index="/inventory">
+            <el-icon><SetUp /></el-icon><span>库存管理</span>
+          </el-menu-item>
+          <el-menu-item index="/reports">
+            <el-icon><DataAnalysis /></el-icon><span>报表中心</span>
+          </el-menu-item>
+          <el-menu-item index="/settings">
+            <el-icon><Setting /></el-icon><span>系统设置</span>
+          </el-menu-item>
+        </template>
       </el-menu>
       <div class="aside-footer">
         <div class="sync-badge" :class="{ ok: syncOk }">
@@ -48,17 +53,17 @@
       <el-header class="admin-header">
         <div class="header-title">{{ currentTitle }}</div>
         <div class="header-right">
-          <div class="store-chip">鲜果超市 · 总店</div>
+          <div class="store-chip">{{ storeLabel }}</div>
           <el-dropdown>
             <div class="user-chip">
-              <el-avatar :size="30" class="user-avatar">店</el-avatar>
-              <span>店长 王</span>
+              <el-avatar :size="30" class="user-avatar">{{ avatarChar }}</el-avatar>
+              <span>{{ userName }}</span>
               <el-icon><ArrowDown /></el-icon>
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item>切换门店</el-dropdown-item>
-                <el-dropdown-item>修改密码</el-dropdown-item>
+                <el-dropdown-item v-if="!isSuper">切换门店</el-dropdown-item>
+                <el-dropdown-item v-if="!isSuper">修改密码</el-dropdown-item>
                 <el-dropdown-item divided @click="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -79,12 +84,20 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, Box, FolderOpened, Avatar, PriceTag, SetUp, DataAnalysis,
-  Setting, ArrowDown,
+  Setting, ArrowDown, OfficeBuilding,
 } from '@element-plus/icons-vue'
-import { clearAdminToken, clearStoreInfo } from '../api'
+import {
+  clearAdminToken, clearStoreInfo, clearUserInfo, getCurrentStore, getStores, getUserInfo,
+} from '../api'
 
 const route = useRoute()
 const router = useRouter()
+
+// 当前登录用户信息（登录时写入本地缓存）
+const user = getUserInfo()
+
+// 是否为平台超级管理员
+const isSuper = computed(() => user.role === 'super')
 
 // 当前激活的菜单项（按路由路径匹配）
 const activeMenu = computed(() => route.path)
@@ -92,13 +105,33 @@ const activeMenu = computed(() => route.path)
 // 当前页面标题（取自路由 meta）
 const currentTitle = computed(() => route.meta.title || '鲜衡云')
 
+// 顶部显示的用户名
+const userName = computed(() => user.name || user.username || '未登录')
+
+// 顶部头像文字：超级管理员显示「超」，管理员显示「管」，店长显示「店」
+const avatarChar = computed(() => {
+  if (user.role === 'super') return '超'
+  if (user.role === 'admin') return '管'
+  return '店'
+})
+
+// 顶部门店标签：超级管理员显示平台名称，其他角色显示当前门店名
+const storeLabel = computed(() => {
+  if (isSuper.value) return '平台运营中心'
+  const stores = getStores()
+  const currentId = getCurrentStore()
+  const matched = stores.find((s) => String(s.id) === String(currentId))
+  return matched ? matched.name : '未选择门店'
+})
+
 // 同步状态（页面设计阶段使用静态模拟值）
 const syncOk = ref(true)
 
-// 退出登录：跳转登录页
+// 退出登录：清除登录态并跳转登录页
 const logout = () => {
   clearAdminToken()
   clearStoreInfo()
+  clearUserInfo()
   router.push('/login')
 }
 </script>

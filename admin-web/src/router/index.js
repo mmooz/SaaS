@@ -1,6 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import AdminLayout from '../layouts/AdminLayout.vue'
-import { getAdminToken } from '../api'
+import { getAdminToken, isSuperAdmin } from '../api'
 
 // 路由表：Web 后台管理各页面
 const routes = [
@@ -14,7 +14,8 @@ const routes = [
     path: '/',
     component: AdminLayout,
     children: [
-      { path: '', redirect: '/dashboard' },
+      { path: '', redirect: () => (isSuperAdmin() ? '/tenants' : '/dashboard') },
+      { path: 'tenants', name: 'Tenants', component: () => import('../views/Tenants.vue'), meta: { title: '租户管理', superOnly: true } },
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '首页仪表盘' } },
       { path: 'products', name: 'Products', component: () => import('../views/Products.vue'), meta: { title: '商品管理' } },
       { path: 'categories', name: 'Categories', component: () => import('../views/Categories.vue'), meta: { title: '分类管理' } },
@@ -32,13 +33,15 @@ const router = createRouter({
   routes,
 })
 
-// 路由守卫：未登录跳转登录页，已登录访问登录页则回首页
+// 路由守卫：未登录跳转登录页，已登录访问登录页则回首页；超级管理员专属页面做权限校验
 router.beforeEach((to) => {
   document.title = `${to.meta.title || ''} · 鲜衡云`
   // 无令牌时除登录页外一律跳登录
   if (to.path !== '/login' && !getAdminToken()) return '/login'
-  // 已有令牌时访问登录页直接回仪表盘
-  if (to.path === '/login' && getAdminToken()) return '/dashboard'
+  // 已有令牌时访问登录页：超级管理员去租户管理，其他角色回仪表盘
+  if (to.path === '/login' && getAdminToken()) return isSuperAdmin() ? '/tenants' : '/dashboard'
+  // 超级管理员专属页面：非超级管理员重定向到仪表盘
+  if (to.meta.superOnly && !isSuperAdmin()) return '/dashboard'
   return true
 })
 
