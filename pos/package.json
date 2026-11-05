@@ -6,6 +6,7 @@
   "description": "电子秤收银系统 - POS 收银终端前端（Tauri 桌面端）",
   "scripts": {
     "dev": "vite",
+    "dev:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-desktop.ps1",
     "build": "vite build",
     "preview": "vite preview"
   },
