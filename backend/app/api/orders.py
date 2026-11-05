@@ -1,19 +1,102 @@
-"""订单管理 API：收银端订单上传（幂等）与订单查询。"""
+"""订单管理 API：订单上传（幂等）、查询与退款退货。"""
 
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Order, OrderItem
+from app.models import Member, Order, OrderItem, RefundItem, RefundRecord
 from app.schemas.order_create import OrderCreate
 from app.schemas.order_out import OrderOut
+from app.schemas.refund_create import RefundCreate
+from app.schemas.refund_out import RefundOut
 from app.services.inventory_service import InventoryService
+from app.services.refund_service import RefundService
 
 # 订单路由
 router = APIRouter(prefix="/api/orders", tags=["订单管理"])
+
+
+def _member_mobiles(db: Session, orders: list[Order]) -> dict[int, str]:
+    """批量查询订单关联会员的手机号。
+
+    :param db: 数据库会话
+    :param orders: 订单列表
+    :return: 会员 ID -> 手机号
+    """
+    ids = {o.member_id for o in orders if o.member_id}
+    if not ids:
+        return {}
+    rows = db.scalars(select(Member).where(Member.id.in_(ids))).all()
+    return {m.id: m.mobile for m in rows}
+
+
+def _refund_totals(db: Session, orders: list[Order]) -> dict[int, float]:
+    """批量统计订单已退款金额。
+
+    :param db: 数据库会话
+    :param orders: 订单列表
+    :return: 订单 ID -> 已退款金额
+    """
+    ids = [o.id for o in orders]
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(RefundRecord.order_id, func.sum(RefundRecord.amount))
+        .where(RefundRecord.order_id.in_(ids))
+        .group_by(RefundRecord.order_id)
+    ).all()
+    return {order_id: round(float(total or 0), 2) for order_id, total in rows}
+
+
+def _refunded_item_map(db: Session, orders: list[Order]) -> dict[int, set[int]]:
+    """批量查询各订单已退货的明细主键。
+
+    :param db: 数据库会话
+    :param orders: 订单列表
+    :return: 订单 ID -> 已退货明细主键集合
+    """
+    ids = [o.id for o in orders]
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(RefundRecord.order_id, RefundItem.order_item_id)
+        .join(RefundItem, RefundItem.refund_id == RefundRecord.id)
+        .where(RefundRecord.order_id.in_(ids))
+    ).all()
+    result: dict[int, set[int]] = {}
+    for order_id, item_id in rows:
+        if item_id is not None:
+            result.setdefault(order_id, set()).add(item_id)
+    return result
+
+
+def _serialize(
+    db: Session, orders: list[Order], with_mobile: bool = True
+) -> list[OrderOut]:
+    """把订单 ORM 批量转换为响应模型（补齐会员手机号、退款信息）。
+
+    :param db: 数据库会话
+    :param orders: 订单列表
+    :param with_mobile: 是否填充会员手机号
+    :return: 订单响应模型列表
+    """
+    mobiles = _member_mobiles(db, orders) if with_mobile else {}
+    totals = _refund_totals(db, orders)
+    refunded_map = _refunded_item_map(db, orders)
+    result: list[OrderOut] = []
+    for order in orders:
+        out = OrderOut.model_validate(order)
+        out.member_mobile = mobiles.get(order.member_id) if order.member_id else None
+        out.refunded_amount = totals.get(order.id, 0)
+        # 标记已退货明细，收银端据此禁用重复退货
+        refunded_ids = refunded_map.get(order.id, set())
+        for item in out.items:
+            item.refunded = item.id in refunded_ids
+        result.append(out)
+    return result
 
 
 @router.post("", response_model=OrderOut, status_code=201)
@@ -22,7 +105,7 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     # 幂等检查：订单号已存在则直接返回（收银端离线重传场景）
     existing = db.scalar(select(Order).where(Order.order_no == data.order_no))
     if existing:
-        return existing
+        return _serialize(db, [existing])[0]
 
     # 创建订单主记录
     order = Order(
@@ -58,11 +141,12 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     InventoryService.deduct_for_order(db, order)
     db.commit()
     db.refresh(order)
-    return order
+    return _serialize(db, [order])[0]
 
 
 @router.get("", response_model=dict)
 def list_orders(
+    keyword: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
     status: str | None = None,
@@ -70,8 +154,14 @@ def list_orders(
     page_size: int = 20,
     db: Session = Depends(get_db),
 ):
-    """分页查询订单（支持按时间范围与状态筛选）。"""
+    """分页查询订单（支持按订单号/会员手机号、时间范围与状态筛选）。"""
     stmt = select(Order)
+    if keyword:
+        # 关键字同时匹配订单号与会员手机号（退款页搜索用）
+        like = f"%{keyword.strip()}%"
+        stmt = stmt.outerjoin(Member, Order.member_id == Member.id).where(
+            or_(Order.order_no.ilike(like), Member.mobile.ilike(like))
+        )
     if start:
         stmt = stmt.where(Order.created_at >= start)
     if end:
@@ -80,22 +170,47 @@ def list_orders(
         stmt = stmt.where(Order.status == status)
 
     total = db.scalar(select(func.count()).select_from(stmt.subquery()))
-    orders = db.scalars(
-        stmt.order_by(Order.id.desc()).offset((page - 1) * page_size).limit(page_size)
-    ).all()
-    items = [OrderOut.model_validate(o) for o in orders]
-    # 填充明细（selectin 预加载避免 N+1 查询）
-    for out, order in zip(items, orders):
-        out.items = [item for item in order.items]
-    return {"total": total, "page": page, "page_size": page_size, "items": items}
+    orders = list(
+        db.scalars(
+            stmt.order_by(Order.id.desc()).offset((page - 1) * page_size).limit(page_size)
+        ).all()
+    )
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": _serialize(db, orders),
+    }
 
 
 @router.get("/{order_no}", response_model=OrderOut)
 def get_order(order_no: str, db: Session = Depends(get_db)):
-    """按订单号查询订单详情。"""
+    """按订单号查询订单详情（含退款标记）。"""
     order = db.scalar(select(Order).where(Order.order_no == order_no))
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
-    out = OrderOut.model_validate(order)
-    out.items = [item for item in order.items]
-    return out
+    return _serialize(db, [order])[0]
+
+
+@router.post("/{order_no}/refund", response_model=RefundOut, status_code=201)
+def refund_order(order_no: str, data: RefundCreate, db: Session = Depends(get_db)):
+    """订单退款/退货：整单退款或按明细退货，自动回滚库存与储值余额。"""
+    order = db.scalar(select(Order).where(Order.order_no == order_no))
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    try:
+        record = RefundService.refund(db, order, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+@router.get("/{order_no}/refunds", response_model=list[RefundOut])
+def list_order_refunds(order_no: str, db: Session = Depends(get_db)):
+    """查询订单的全部退款记录（时间倒序）。"""
+    order = db.scalar(select(Order).where(Order.order_no == order_no))
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    return RefundService.list_refunds(db, order.id)

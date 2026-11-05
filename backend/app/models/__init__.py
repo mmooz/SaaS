@@ -13,6 +13,8 @@ from app.models.order_item import OrderItem
 from app.models.product import Product
 from app.models.product_price_history import ProductPriceHistory
 from app.models.promotion import Promotion
+from app.models.refund_item import RefundItem
+from app.models.refund_record import RefundRecord
 from app.models.shift_session import ShiftSession
 from app.models.sync_record import SyncRecord
 from app.models.user import User
@@ -29,6 +31,8 @@ __all__ = [
     "InventoryMovement",
     "User",
     "ShiftSession",
+    "RefundRecord",
+    "RefundItem",
     "SyncRecord",
     "OperationLog",
 ]

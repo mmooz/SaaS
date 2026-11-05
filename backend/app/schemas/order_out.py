@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.order_item_create import OrderItemCreate
+from app.schemas.order_item_out import OrderItemOut
 
 
 class OrderOut(BaseModel):
@@ -32,6 +32,10 @@ class OrderOut(BaseModel):
     pay_details: str | None
     # 关联会员 ID
     member_id: int | None
+    # 关联会员手机号（退款按手机号搜索时展示）
+    member_mobile: str | None = None
+    # 已退款金额（由退款记录累计）
+    refunded_amount: float = 0
     # 备注
     remark: str | None
     # 是否已同步
@@ -39,4 +43,4 @@ class OrderOut(BaseModel):
     # 下单时间
     created_at: datetime
     # 订单明细
-    items: list[OrderItemCreate] = []
+    items: list[OrderItemOut] = []

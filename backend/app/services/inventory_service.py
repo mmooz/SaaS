@@ -84,3 +84,28 @@ class InventoryService:
             InventoryService.record(
                 db, product, "sale", delta, ref_id=order.id, operator_id=order.cashier_id
             )
+
+    @staticmethod
+    def restore_for_refund(db: Session, order, items) -> None:
+        """退款后按退货明细回滚库存并写入退款流水。
+
+        :param db: 数据库会话
+        :param order: 原订单 ORM 对象
+        :param items: 本次退货的订单明细列表
+        """
+        # 一次性取出涉及的商品，避免逐条查询
+        product_ids = [i.product_id for i in items if i.product_id]
+        if not product_ids:
+            return
+        products = {
+            p.id: p for p in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+        }
+        for item in items:
+            product = products.get(item.product_id)
+            if not product:
+                continue
+            # 退货量为正，库存加回
+            delta = (item.weight_kg or 0) if item.is_weighted else item.qty
+            InventoryService.record(
+                db, product, "refund", delta, ref_id=order.id, operator_id=order.cashier_id
+            )
