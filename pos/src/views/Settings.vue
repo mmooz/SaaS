@@ -338,14 +338,32 @@ const saveSettings = () => {
   ElMessage.success('设置已保存')
 }
 
-// 测试打印：按打印机类型生成样例并送入打印通道
+/**
+ * 组装页面当前表单对应的打印配置（测试打印直接使用，无需先保存）
+ * @returns {object} 本次打印生效的打印配置
+ */
+const buildPrintInfo = () => ({
+  storeName: storeForm.name,
+  storeAddress: storeForm.address,
+  phone: storeForm.phone,
+  receiptHeader: storeForm.receiptHeader,
+  slogan: storeForm.slogan,
+  paperWidth: parseInt(receiptPrinter.paperWidth, 10) || 58,
+  printMode: printMode.value,
+  receiptPrinterName: receiptPrinter.systemName || '',
+  labelPrinterName: labelPrinter.systemName || '',
+})
+
+// 测试打印：按打印机类型生成样例，并使用页面当前（未保存）的打印配置
 const testPrint = async (name) => {
   const orderNo = `TEST${Date.now()}`
+  const info = buildPrintInfo()
   let channel = 'html'
   if (name === '标签打印机') {
     channel = await PrintService.printLabel(
       { orderNo },
       { productId: 1, name: '测试商品', weight: 0.52, price: 9.8, amount: 5.1 },
+      info,
     )
   } else {
     channel = await PrintService.printReceipt({
@@ -360,7 +378,12 @@ const testPrint = async (name) => {
         { name: '测试称重商品', weighted: true, weight: 0.52, price: 9.8, amount: 5.1 },
         { name: '测试按件商品', weighted: false, qty: 1, price: 7.7, amount: 7.7 },
       ],
-    })
+    }, info)
+  }
+  if (channel === 'failed') {
+    const printerName = name === '标签打印机' ? info.labelPrinterName : info.receiptPrinterName
+    ElMessage.error(`测试打印失败：未找到系统打印机「${printerName}」，请刷新打印机列表后重新选择`)
+    return
   }
   const channelText = channel === 'native' ? '原生直连' : '浏览器打印'
   ElMessage.success(`测试打印已发送：${name}（${channelText}）`)

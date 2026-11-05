@@ -102,12 +102,41 @@ export class PrintService {
   }
 
   /**
+   * 解析本次打印生效的配置：传入临时配置时优先使用（测试打印无需先保存）
+   * @param {object|null} overrideInfo 临时覆盖的打印配置
+   * @returns {object} 本次打印生效的打印配置
+   */
+  static resolveInfo(overrideInfo = null) {
+    this.loadStoreInfo()
+    if (!overrideInfo) return this.storeInfo
+    return { ...this.storeInfo, ...overrideInfo }
+  }
+
+  /**
+   * 校验系统打印机是否仍然存在（离线状态无法通过枚举判断，交由打印作业结果体现）
+   * @param {string} printerName 目标系统打印机名称
+   * @returns {Promise<boolean>} 存在时为 true
+   */
+  static async checkPrinter(printerName) {
+    try {
+      if (await TauriPrintService.hasPrinter(printerName)) return true
+      console.warn(`打印机「${printerName}」不存在或已被移除`)
+      return false
+    } catch (err) {
+      // 枚举失败时不阻断打印，交由后续原生打印结果决定
+      console.warn('校验打印机失败：', err)
+      return true
+    }
+  }
+
+  /**
    * 判断是否走原生直连打印
    * @param {string} printerName 目标系统打印机名称
+   * @param {string} printMode 打印通道（auto/html），默认取当前配置
    * @returns {boolean} 已选择打印机、未强制 HTML 且处于 Tauri 环境时为 true
    */
-  static shouldUseNative(printerName) {
-    if (this.storeInfo.printMode === 'html') return false
+  static shouldUseNative(printerName, printMode = this.storeInfo.printMode) {
+    if (printMode === 'html') return false
     if (!printerName) return false
     return TauriPrintService.isAvailable()
   }
@@ -115,10 +144,11 @@ export class PrintService {
   /**
    * 组装小票原生打印任务（字段与 Rust ReceiptJob 对应）
    * @param {object} order 小票数据模型
+   * @param {object|null} overrideInfo 临时打印配置
    * @returns {object} 原生打印任务
    */
-  static buildReceiptJob(order) {
-    const info = this.storeInfo
+  static buildReceiptJob(order, overrideInfo = null) {
+    const info = overrideInfo || this.storeInfo
     const items = (order.items || []).map((item) => {
       const row = {
         name: String(item.name ?? ''),
@@ -156,11 +186,13 @@ export class PrintService {
    * 组装称重标签原生打印任务（字段与 Rust LabelJob 对应）
    * @param {object} order 订单信息（提供单号）
    * @param {Array} items 称重商品列表
+   * @param {object|null} overrideInfo 临时打印配置
    * @returns {object} 原生打印任务
    */
-  static buildLabelJob(order, items) {
+  static buildLabelJob(order, items, overrideInfo = null) {
+    const info = overrideInfo || this.storeInfo
     return {
-      storeName: this.storeInfo.storeName,
+      storeName: info.storeName,
       printTime: F.datetime(),
       labels: items.map((item) => ({
         name: String(item.name ?? ''),
@@ -173,64 +205,71 @@ export class PrintService {
   }
 
   /**
-   * 打印小票：原生直连优先，未配置或失败时回退 HTML
+   * 打印小票：原生直连优先，未配置时回退 HTML
    * @param {object} order 小票数据模型（见 ReceiptTemplate）
-   * @returns {Promise<'native'|'html'>} 实际使用的打印通道
+   * @param {object|null} overrideInfo 临时打印配置（测试打印使用页面当前表单）
+   * @returns {Promise<'native'|'html'|'failed'>} 实际通道；所选打印机不存在时为 failed
    */
-  static async printReceipt(order) {
-    this.loadStoreInfo()
-    const printerName = this.storeInfo.receiptPrinterName
-    if (this.shouldUseNative(printerName)) {
+  static async printReceipt(order, overrideInfo = null) {
+    const info = this.resolveInfo(overrideInfo)
+    const printerName = info.receiptPrinterName
+    if (this.shouldUseNative(printerName, info.printMode)) {
+      // 打印机已被移除时明确失败，不再静默弹浏览器打印框
+      if (!(await this.checkPrinter(printerName))) return 'failed'
       try {
-        await TauriPrintService.printReceipt(printerName, this.buildReceiptJob(order))
+        await TauriPrintService.printReceipt(printerName, this.buildReceiptJob(order, info))
         return 'native'
       } catch (err) {
         console.warn('原生打印小票失败，回退 HTML 打印：', err)
       }
     }
     const template = new ReceiptTemplate()
-    this.print(template.build(order, this.storeInfo))
+    this.print(template.build(order, info))
     return 'html'
   }
 
   /**
-   * 打印单张称重标签：原生直连优先，未配置或失败时回退 HTML
+   * 打印单张称重标签：原生直连优先，未配置时回退 HTML
    * @param {object} order 订单信息
    * @param {object} item 称重商品
-   * @returns {Promise<'native'|'html'>} 实际使用的打印通道
+   * @param {object|null} overrideInfo 临时打印配置
+   * @returns {Promise<'native'|'html'|'failed'>} 实际通道；所选打印机不存在时为 failed
    */
-  static async printLabel(order, item) {
-    this.loadStoreInfo()
-    const printerName = this.storeInfo.labelPrinterName
-    if (this.shouldUseNative(printerName)) {
+  static async printLabel(order, item, overrideInfo = null) {
+    const info = this.resolveInfo(overrideInfo)
+    const printerName = info.labelPrinterName
+    if (this.shouldUseNative(printerName, info.printMode)) {
+      if (!(await this.checkPrinter(printerName))) return 'failed'
       try {
-        await TauriPrintService.printLabels(printerName, this.buildLabelJob(order, [item]))
+        await TauriPrintService.printLabels(printerName, this.buildLabelJob(order, [item], info))
         return 'native'
       } catch (err) {
         console.warn('原生打印标签失败，回退 HTML 打印：', err)
       }
     }
     const template = new LabelTemplate()
-    this.print(template.build(order, item, this.storeInfo))
+    this.print(template.build(order, item, info))
     return 'html'
   }
 
   /**
-   * 打印订单内全部称重商品的标签：原生直连优先，未配置或失败时回退 HTML
+   * 打印订单内全部称重商品的标签：原生直连优先，未配置时回退 HTML
    * @param {object} order 订单信息
    * @param {Array} items 称重商品列表，缺省取订单内的称重明细
-   * @returns {Promise<number>} 实际打印的标签数量
+   * @param {object|null} overrideInfo 临时打印配置
+   * @returns {Promise<number>} 实际打印的标签数量；所选打印机不存在时返回 -1
    */
-  static async printLabels(order, items) {
-    this.loadStoreInfo()
+  static async printLabels(order, items, overrideInfo = null) {
+    const info = this.resolveInfo(overrideInfo)
     const list = (items || order.items || []).filter((i) => i.weighted)
     if (!list.length) return 0
-    const printerName = this.storeInfo.labelPrinterName
-    if (this.shouldUseNative(printerName)) {
+    const printerName = info.labelPrinterName
+    if (this.shouldUseNative(printerName, info.printMode)) {
+      if (!(await this.checkPrinter(printerName))) return -1
       try {
         const count = await TauriPrintService.printLabels(
           printerName,
-          this.buildLabelJob(order, list),
+          this.buildLabelJob(order, list, info),
         )
         return Number(count) || list.length
       } catch (err) {
@@ -238,7 +277,7 @@ export class PrintService {
       }
     }
     const template = new LabelTemplate()
-    this.print(template.buildMany(order, list, this.storeInfo))
+    this.print(template.buildMany(order, list, info))
     return list.length
   }
 
