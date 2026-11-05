@@ -446,6 +446,113 @@ export function deleteCategory(id) {
   return request(`/api/categories/${id}`, { method: 'DELETE' })
 }
 
+/* ---------------- 用户 / 日志 / 设置 / 备份 ---------------- */
+
+/**
+ * 分页查询后台用户
+ * @param {object} params { keyword, page, pageSize }
+ * @returns {Promise<object>} 用户分页数据
+ */
+export function fetchUsers(params = {}) {
+  return request(
+    `/api/users${query({ keyword: params.keyword, page: params.page, page_size: params.pageSize })}`,
+  )
+}
+
+/**
+ * 新增后台用户
+ * @param {object} data { username, name, role, password }
+ * @returns {Promise<object>} 用户信息
+ */
+export function createUser(data) {
+  return request('/api/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      username: data.username,
+      name: data.name,
+      role: data.role,
+      password: data.password || null,
+    }),
+  })
+}
+
+/**
+ * 更新后台用户
+ * @param {number} id 用户 ID
+ * @param {object} data { name, role, enabled, password }
+ * @returns {Promise<object>} 用户信息
+ */
+export function updateUser(id, data) {
+  return request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+
+/**
+ * 重置用户密码为默认密码
+ * @param {number} id 用户 ID
+ * @returns {Promise<object>} 用户信息
+ */
+export function resetUserPassword(id) {
+  return request(`/api/users/${id}/reset-password`, { method: 'POST' })
+}
+
+/**
+ * 分页查询操作日志
+ * @param {object} params { keyword, page, pageSize }
+ * @returns {Promise<object>} 日志分页数据
+ */
+export function fetchOperationLogs(params = {}) {
+  return request(
+    `/api/operation-logs${query({
+      keyword: params.keyword,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  )
+}
+
+/**
+ * 读取系统设置（全部分组）
+ * @returns {Promise<object>} { store, cashier }
+ */
+export function fetchSettings() {
+  return request('/api/settings')
+}
+
+/**
+ * 保存指定分组设置
+ * @param {string} group 分组名（store/cashier）
+ * @param {object} data 设置内容
+ * @returns {Promise<object>} 保存后的设置
+ */
+export function saveSettings(group, data) {
+  return request(`/api/settings/${group}`, { method: 'PUT', body: JSON.stringify(data) })
+}
+
+/**
+ * 查询备份列表
+ * @returns {Promise<Array<object>>} 备份文件列表
+ */
+export function fetchBackups() {
+  return request('/api/backups')
+}
+
+/**
+ * 立即创建备份
+ * @returns {Promise<object>} 新备份文件
+ */
+export function createBackup() {
+  return request('/api/backups', { method: 'POST' })
+}
+
+/**
+ * 备份下载地址
+ * @param {string} name 备份文件名
+ * @returns {string} 下载接口地址
+ */
+export function backupDownloadUrl(name) {
+  return `${BASE_URL}/api/backups/${encodeURIComponent(name)}/download`
+}
+
 /* ---------------- 订单 ---------------- */
 
 /**

@@ -44,7 +44,7 @@
               </el-select>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" @click="save('门店信息已保存')">保存设置</el-button>
+              <el-button type="primary" @click="saveGroup('store', storeForm, '门店信息已保存')">保存设置</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -84,7 +84,7 @@
               </el-select>
             </el-form-item>
             <el-form-item>
-              <el-button type="primary" @click="save('收银参数已保存')">保存设置</el-button>
+              <el-button type="primary" @click="saveGroup('cashier', cashierForm, '收银参数已保存')">保存设置</el-button>
             </el-form-item>
           </el-form>
         </div>
@@ -93,7 +93,7 @@
         <div v-show="activeMenu === 'users'">
           <div class="content-head">
             <h3 class="section-title">用户权限</h3>
-            <el-button type="primary" :icon="Plus" @click="userDialog = true">新增用户</el-button>
+            <el-button type="primary" :icon="Plus" @click="openAddUser">新增用户</el-button>
           </div>
           <el-table :data="users" empty-text="暂无用户" class="content-table">
             <el-table-column prop="username" label="用户名" width="130" />
@@ -108,8 +108,8 @@
                 <el-tag size="small" :type="row.status === '启用' ? 'success' : 'info'" effect="light">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="lastLogin" label="最近登录" min-width="130" align="center">
-              <template #default="{ row }"><span class="cell-time">{{ row.lastLogin }}</span></template>
+            <el-table-column label="创建时间" min-width="130" align="center">
+              <template #default="{ row }"><span class="cell-time">{{ row.createdAt }}</span></template>
             </el-table-column>
             <el-table-column label="操作" width="170" align="center">
               <template #default="{ row }">
@@ -136,29 +136,32 @@
               </div>
             </div>
           </div>
-          <!-- 新增用户弹窗 -->
-          <el-dialog v-model="userDialog" title="新增用户" width="440px" destroy-on-close>
+          <!-- 新增 / 编辑用户弹窗 -->
+          <el-dialog v-model="userDialog" :title="userForm.id ? '编辑用户' : '新增用户'" width="440px" destroy-on-close>
             <el-form label-width="80px">
               <el-form-item label="用户名" required>
-                <el-input v-model="userForm.username" placeholder="登录账号" />
+                <el-input v-model="userForm.username" placeholder="登录账号" :disabled="!!userForm.id" />
               </el-form-item>
               <el-form-item label="姓名" required>
                 <el-input v-model="userForm.name" placeholder="真实姓名" />
               </el-form-item>
               <el-form-item label="角色" required>
                 <el-select v-model="userForm.role" style="width: 100%">
-                  <el-option label="管理员" value="管理员" />
-                  <el-option label="店长" value="店长" />
-                  <el-option label="收银员" value="收银员" />
+                  <el-option label="管理员" value="admin" />
+                  <el-option label="店长" value="manager" />
+                  <el-option label="收银员" value="cashier" />
                 </el-select>
               </el-form-item>
-              <el-form-item label="初始密码">
+              <el-form-item v-if="!userForm.id" label="初始密码">
                 <el-input v-model="userForm.password" placeholder="默认 123456" />
+              </el-form-item>
+              <el-form-item v-else label="账号状态">
+                <el-switch v-model="userForm.enabled" active-text="启用" inactive-text="停用" />
               </el-form-item>
             </el-form>
             <template #footer>
               <el-button @click="userDialog = false">取消</el-button>
-              <el-button type="primary" @click="addUser">确认新增</el-button>
+              <el-button type="primary" :loading="userSaving" @click="saveUser">保存</el-button>
             </template>
           </el-dialog>
         </div>
@@ -173,9 +176,11 @@
               clearable
               :prefix-icon="Search"
               style="width: 240px"
+              @keyup.enter="searchLogs"
+              @clear="searchLogs"
             />
           </div>
-          <el-table :data="filteredLogs" empty-text="暂无日志记录" class="content-table">
+          <el-table :data="logs" empty-text="暂无日志记录" class="content-table">
             <el-table-column label="时间" width="150" align="right">
               <template #default="{ row }"><span class="cell-time">{{ row.time }}</span></template>
             </el-table-column>
@@ -185,19 +190,16 @@
                 <el-tag size="small" :type="roleTag(row.role)" effect="light">{{ row.role }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="action" label="操作内容" min-width="220" show-overflow-tooltip />
-            <el-table-column label="结果" width="90" align="center">
-              <template #default="{ row }">
-                <el-tag size="small" :type="row.result === '成功' ? 'success' : 'danger'" effect="light">{{ row.result }}</el-tag>
-              </template>
-            </el-table-column>
+            <el-table-column prop="actionText" label="操作内容" min-width="220" show-overflow-tooltip />
           </el-table>
           <el-pagination
             class="pager"
             background
             layout="total, prev, pager, next"
-            :total="filteredLogs.length"
-            :page-size="10"
+            :total="logTotal"
+            :page-size="logPageSize"
+            :current-page="logPage"
+            @current-change="loadLogs"
           />
         </div>
 
@@ -215,22 +217,13 @@
             <el-table-column label="备份时间" width="150" align="right">
               <template #default="{ row }"><span class="cell-time">{{ row.time }}</span></template>
             </el-table-column>
-            <el-table-column label="类型" width="90" align="center">
-              <template #default="{ row }">
-                <el-tag size="small" :type="row.type === '自动' ? 'info' : 'warning'" effect="light">{{ row.type }}</el-tag>
-              </template>
-            </el-table-column>
+            <el-table-column prop="name" label="文件名" min-width="170" show-overflow-tooltip />
             <el-table-column prop="size" label="大小" width="100" align="right">
               <template #default="{ row }"><span class="num">{{ row.size }}</span></template>
             </el-table-column>
-            <el-table-column label="操作" width="140" align="center">
+            <el-table-column label="操作" width="90" align="center">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="download(row)">下载</el-button>
-                <el-popconfirm title="恢复将覆盖当前数据，确定继续？" @confirm="restore(row)">
-                  <template #reference>
-                    <el-button link type="warning" size="small">恢复</el-button>
-                  </template>
-                </el-popconfirm>
               </template>
             </el-table-column>
           </el-table>
@@ -241,15 +234,56 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, Shop, Operation, User, Document, FolderChecked, InfoFilled } from '@element-plus/icons-vue'
+import {
+  fetchSettings,
+  saveSettings,
+  fetchUsers,
+  createUser,
+  updateUser,
+  resetUserPassword,
+  fetchOperationLogs,
+  fetchBackups,
+  createBackup,
+  backupDownloadUrl,
+} from '../api'
 
 // 当前设置子菜单
 const activeMenu = ref('store')
 
-// 通用保存提示（示意）
-const save = (msg) => ElMessage.success(msg)
+// 角色代码 -> 中文名称
+const ROLE_NAMES = { admin: '管理员', manager: '店长', cashier: '收银员' }
+
+/**
+ * 角色标签颜色：管理员红 / 店长橙 / 收银员蓝
+ * @param {string} role 角色代码或中文名称
+ * @returns {string} el-tag 类型
+ */
+const roleTag = (role) =>
+  role === 'admin' || role === '管理员'
+    ? 'danger'
+    : role === 'manager' || role === '店长'
+      ? 'warning'
+      : 'info'
+
+/**
+ * 格式化 ISO 时间字符串为 yyyy-MM-dd HH:mm:ss
+ * @param {string} iso 服务端时间
+ * @returns {string} 格式化时间
+ */
+const formatTime = (iso) => (iso || '').replace('T', ' ').slice(0, 19)
+
+/**
+ * 把字节数格式化为 KB/MB
+ * @param {number} bytes 字节数
+ * @returns {string} 可读大小
+ */
+const formatSize = (bytes) => {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
 
 // ---------- 门店信息表单 ----------
 const storeForm = reactive({
@@ -272,94 +306,237 @@ const cashierForm = reactive({
   syncInterval: '5',
 })
 
+// 加载服务端门店信息与收银参数
+async function loadSettings() {
+  try {
+    const data = await fetchSettings()
+    Object.assign(storeForm, data.store || {})
+    Object.assign(cashierForm, data.cashier || {})
+  } catch (e) {
+    ElMessage.error(e.message || '设置加载失败')
+  }
+}
+
+/**
+ * 保存指定分组设置
+ * @param {string} group 分组名（store/cashier）
+ * @param {object} form 表单对象
+ * @param {string} msg 成功提示
+ */
+async function saveGroup(group, form, msg) {
+  try {
+    await saveSettings(group, { ...form })
+    ElMessage.success(msg)
+  } catch (e) {
+    ElMessage.error(e.message || '保存失败')
+  }
+}
+
 // ---------- 用户权限 ----------
-// 模拟数据：用户列表
-const users = ref([
-  { username: 'admin', name: '张经理', role: '管理员', status: '启用', lastLogin: '2026-11-05 18:00' },
-  { username: 'store01', name: '王店长', role: '店长', status: '启用', lastLogin: '2026-11-05 17:52' },
-  { username: 'cashier01', name: '李收银', role: '收银员', status: '启用', lastLogin: '2026-11-05 18:10' },
-  { username: 'cashier02', name: '张收银', role: '收银员', status: '启用', lastLogin: '2026-11-05 15:30' },
-  { username: 'cashier03', name: '陈收银', role: '收银员', status: '停用', lastLogin: '2026-11-02 12:00' },
-])
-
-// 角色标签：管理员红 / 店长橙 / 收银员蓝
-const roleTag = (r) => (r === '管理员' ? 'danger' : r === '店长' ? 'warning' : 'info')
-
-// 新增用户弹窗
+// 用户列表（来自服务端）
+const users = ref([])
+// 新增/编辑弹窗
 const userDialog = ref(false)
-const userForm = reactive({ username: '', name: '', role: '收银员', password: '123456' })
+// 保存中状态
+const userSaving = ref(false)
+// 用户表单模型
+const userForm = reactive({
+  id: null,
+  username: '',
+  name: '',
+  role: 'cashier',
+  password: '',
+  enabled: true,
+})
 
-const addUser = () => {
-  if (!userForm.username || !userForm.name) {
+/**
+ * 服务端用户转表格行
+ * @param {object} u 服务端用户
+ * @returns {object} 表格行
+ */
+const toUserRow = (u) => ({
+  id: u.id,
+  username: u.username,
+  name: u.name,
+  role: ROLE_NAMES[u.role] || u.role,
+  roleCode: u.role,
+  enabled: u.enabled,
+  status: u.enabled ? '启用' : '停用',
+  createdAt: formatTime(u.created_at),
+})
+
+// 加载用户列表
+async function loadUsers() {
+  try {
+    const res = await fetchUsers({ pageSize: 200 })
+    users.value = (res.items || []).map(toUserRow)
+  } catch (e) {
+    ElMessage.error(e.message || '用户加载失败')
+  }
+}
+
+// 打开新增用户弹窗
+const openAddUser = () => {
+  Object.assign(userForm, {
+    id: null,
+    username: '',
+    name: '',
+    role: 'cashier',
+    password: '',
+    enabled: true,
+  })
+  userDialog.value = true
+}
+
+// 打开编辑用户弹窗
+const editUser = (row) => {
+  Object.assign(userForm, {
+    id: row.id,
+    username: row.username,
+    name: row.name,
+    role: row.roleCode,
+    password: '',
+    enabled: row.enabled,
+  })
+  userDialog.value = true
+}
+
+// 保存新增/编辑用户到服务端
+const saveUser = async () => {
+  if (!userForm.name || (!userForm.id && !userForm.username)) {
     ElMessage.warning('请填写用户名和姓名')
     return
   }
-  users.value.push({
-    username: userForm.username,
-    name: userForm.name,
-    role: userForm.role,
-    status: '启用',
-    lastLogin: '——',
-  })
-  ElMessage.success(`用户「${userForm.username}」已创建`)
-  userDialog.value = false
+  userSaving.value = true
+  try {
+    if (userForm.id) {
+      await updateUser(userForm.id, {
+        name: userForm.name,
+        role: userForm.role,
+        enabled: userForm.enabled,
+      })
+      ElMessage.success('用户已更新')
+    } else {
+      await createUser({
+        username: userForm.username,
+        name: userForm.name,
+        role: userForm.role,
+        password: userForm.password,
+      })
+      ElMessage.success(`用户「${userForm.username}」已创建`)
+    }
+    userDialog.value = false
+    await loadUsers()
+  } catch (e) {
+    ElMessage.error(e.message || '保存失败')
+  } finally {
+    userSaving.value = false
+  }
 }
 
-// 编辑用户（示意）
-const editUser = (row) => ElMessage.info(`编辑用户「${row.username}」（示意）`)
-
-// 重置密码（示意）
+// 重置密码：服务端重置为默认密码 123456
 const resetPassword = (row) => {
-  row.passwordReset = true
-  ElMessage.success(`已重置「${row.username}」密码为 123456`)
+  ElMessageBox.confirm(`确定将「${row.username}」的密码重置为 123456 吗？`, '重置密码', {
+    confirmButtonText: '重置',
+    cancelButtonText: '取消',
+    type: 'warning',
+  })
+    .then(async () => {
+      try {
+        await resetUserPassword(row.id)
+        ElMessage.success(`已重置「${row.username}」密码为 123456`)
+      } catch (e) {
+        ElMessage.error(e.message || '重置失败')
+      }
+    })
+    .catch(() => {})
 }
 
 // ---------- 操作日志 ----------
-// 模拟数据：操作日志
-const logs = ref([
-  { time: '2026-11-05 18:20', operator: 'admin', role: '管理员', action: '新增促销「晚间蔬菜特价」', result: '成功' },
-  { time: '2026-11-05 18:05', operator: 'cashier01', role: '收银员', action: '登记报损：上海青 2.3kg（损耗）', result: '成功' },
-  { time: '2026-11-05 17:40', operator: 'store01', role: '店长', action: '创建入库单 RK20261105-003', result: '成功' },
-  { time: '2026-11-05 17:22', operator: 'admin', role: '管理员', action: '修改收银参数：积分比例调整', result: '成功' },
-  { time: '2026-11-05 16:50', operator: 'cashier02', role: '收银员', action: '发起盘点单 PD20261105-001', result: '成功' },
-  { time: '2026-11-05 16:10', operator: 'store01', role: '店长', action: '导出销售报表（11 月）', result: '成功' },
-  { time: '2026-11-05 15:00', operator: 'cashier03', role: '收银员', action: '登录失败：密码错误', result: '失败' },
-  { time: '2026-11-05 14:30', operator: 'admin', role: '管理员', action: '创建用户「cashier03」', result: '成功' },
-  { time: '2026-11-05 11:00', operator: 'store01', role: '店长', action: '调整商品「西红柿」售价', result: '成功' },
-  { time: '2026-11-05 09:12', operator: 'admin', role: '管理员', action: '执行手动数据备份', result: '成功' },
-  { time: '2026-11-04 22:00', operator: 'system', role: '系统', action: '自动备份：每日例行备份', result: '成功' },
-  { time: '2026-11-04 18:30', operator: 'cashier01', role: '收银员', action: '会员充值：张**芳 +500 元', result: '成功' },
-])
-
-// 日志搜索过滤
+// 日志列表（服务端分页）
+const logs = ref([])
+// 日志搜索关键字
 const logKeyword = ref('')
-const filteredLogs = computed(() => {
-  const k = logKeyword.value.trim()
-  if (!k) return logs.value
-  return logs.value.filter((l) => l.operator.includes(k) || l.action.includes(k))
-})
+// 日志页码
+const logPage = ref(1)
+// 日志总数
+const logTotal = ref(0)
+// 日志每页数量
+const logPageSize = 20
 
-// ---------- 数据备份 ----------
-// 模拟数据：备份历史
-const backupHistory = ref([
-  { time: '2026-11-05 02:00', type: '自动', size: '86.4 MB' },
-  { time: '2026-11-05 09:12', type: '手动', size: '86.2 MB' },
-  { time: '2026-11-04 02:00', type: '自动', size: '84.1 MB' },
-  { time: '2026-11-03 02:00', type: '自动', size: '82.7 MB' },
-  { time: '2026-11-01 10:00', type: '手动', size: '80.3 MB' },
-])
-
-// 立即备份（示意）
-const backupNow = () => {
-  backupHistory.value.unshift({ time: '2026-11-05 18:30', type: '手动', size: '86.5 MB' })
-  ElMessage.success('备份已开始，完成后将显示在列表（示意）')
+/**
+ * 加载操作日志
+ * @param {number} page 页码
+ */
+async function loadLogs(page = 1) {
+  logPage.value = page
+  try {
+    const res = await fetchOperationLogs({
+      keyword: logKeyword.value.trim(),
+      page,
+      pageSize: logPageSize,
+    })
+    logTotal.value = res.total || 0
+    logs.value = (res.items || []).map((item) => ({
+      time: formatTime(item.created_at),
+      operator: item.operator || 'system',
+      role: ROLE_NAMES[item.role] || item.role || '系统',
+      actionText: item.detail ? `${item.action}：${item.detail}` : item.action,
+    }))
+  } catch (e) {
+    ElMessage.error(e.message || '日志加载失败')
+  }
 }
 
-// 下载备份（示意）
-const download = (row) => ElMessage.success(`开始下载备份文件 ${row.time}（示意）`)
+// 搜索日志（重置到第一页）
+const searchLogs = () => loadLogs(1)
 
-// 恢复备份（示意）
-const restore = (row) => ElMessage.success(`已从 ${row.time} 的备份恢复数据（示意）`)
+// ---------- 数据备份 ----------
+// 备份文件列表
+const backupHistory = ref([])
+
+// 加载备份列表
+async function loadBackups() {
+  try {
+    const list = await fetchBackups()
+    backupHistory.value = (list || []).map((b) => ({
+      name: b.name,
+      time: formatTime(b.created_at),
+      size: formatSize(b.size),
+    }))
+  } catch (e) {
+    ElMessage.error(e.message || '备份列表加载失败')
+  }
+}
+
+// 立即备份：调用服务端生成数据库备份
+const backupNow = async () => {
+  try {
+    const backup = await createBackup()
+    ElMessage.success(`备份已创建：${backup.name}`)
+    await loadBackups()
+  } catch (e) {
+    ElMessage.error(e.message || '备份失败')
+  }
+}
+
+// 下载备份文件
+const download = (row) => {
+  window.open(backupDownloadUrl(row.name), '_blank')
+}
+
+// 切换设置页签时按需加载对应数据
+watch(activeMenu, (tab) => {
+  if (tab === 'users') loadUsers()
+  else if (tab === 'logs') loadLogs(1)
+  else if (tab === 'backup') loadBackups()
+})
+
+// 页面初始化：加载设置与用户列表
+onMounted(() => {
+  loadSettings()
+  loadUsers()
+})
 </script>
 
 <style scoped>
