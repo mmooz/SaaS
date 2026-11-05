@@ -215,12 +215,12 @@
               <div class="sync-value num">{{ syncInfo.uploadCount }}</div>
             </div>
             <div class="sync-item">
-              <div class="sync-label">待下载商品数</div>
+              <div class="sync-label">已同步商品数</div>
               <div class="sync-value num">{{ syncInfo.downloadCount }}</div>
             </div>
           </div>
           <!-- 立即同步按钮 -->
-          <el-button type="primary" class="big-btn sync-btn" @click="doSync">
+          <el-button type="primary" class="big-btn sync-btn" :loading="syncing" @click="doSync">
             <el-icon><Refresh /></el-icon>&nbsp;立即同步
           </el-button>
           <!-- 同步日志表 -->
@@ -256,6 +256,7 @@ import { ArrowLeft, Check, Odometer, Printer, Refresh, Shop } from '@element-plu
 import { PrintService } from '../services/print/PrintService'
 import { TauriPrintService } from '../services/print/TauriPrintService'
 import { TauriScaleService } from '../services/scale/TauriScaleService'
+import { usePosStore } from '../stores/posStore'
 
 /** 设置项在 localStorage 中的键名 */
 const SETTINGS_KEY = 'pos_settings'
@@ -311,14 +312,27 @@ const storeForm = reactive({
   slogan: PrintService.storeInfo.slogan,
 })
 
-// 同步状态（模拟数据）
-const syncInfo = reactive({ lastTime: '2026-11-05 09:30', uploadCount: 3, downloadCount: 12 })
-const syncLogs = ref([
-  { time: '2026-11-05 09:30', content: '上传订单 12 单', ok: true },
-  { time: '2026-11-05 09:30', content: '下载商品价格变更 6 条', ok: true },
-  { time: '2026-11-05 08:00', content: '上传订单 5 单', ok: true },
-  { time: '2026-11-04 20:00', content: '同步收银班次数据', ok: false },
-])
+// 收银全局状态（同步状态与商品数据来源）
+const store = usePosStore()
+// 同步进行中状态
+const syncing = ref(false)
+
+// 同步状态：时间与数量均取自本地同步结果
+const syncInfo = reactive({ lastTime: '—', uploadCount: 0, downloadCount: 0 })
+// 本次运行期间的同步日志
+const syncLogs = ref([])
+
+/**
+ * 刷新同步状态卡片（时间取上次同步时间，数量取本地数据）
+ * @returns {void}
+ */
+const refreshSyncInfo = () => {
+  syncInfo.lastTime = store.lastSyncTime
+    ? new Date(store.lastSyncTime).toLocaleString('zh-CN', { hour12: false })
+    : '—'
+  syncInfo.uploadCount = store.offlineOrders.length
+  syncInfo.downloadCount = store.products.length
+}
 
 /**
  * 加载本机系统打印机列表（浏览器环境返回空列表）
@@ -479,13 +493,23 @@ const testPrint = async (name) => {
   ElMessage.success(`测试打印已发送：${name}（${channelText}）`)
 }
 
-// 立即同步：更新同步状态并追加日志（演示）
-const doSync = () => {
-  syncInfo.lastTime = new Date().toLocaleString('zh-CN', { hour12: false })
-  syncInfo.uploadCount = 0
-  syncInfo.downloadCount = 0
-  syncLogs.value.unshift({ time: syncInfo.lastTime, content: '全量同步完成', ok: true })
-  ElMessage.success('同步完成，数据已是最新（演示）')
+// 立即同步：拉取服务端商品/分类并刷新状态与日志
+const doSync = async () => {
+  syncing.value = true
+  const time = new Date().toLocaleString('zh-CN', { hour12: false })
+  await store.syncProducts()
+  const ok = store.syncState === 'synced'
+  refreshSyncInfo()
+  syncLogs.value.unshift({
+    time,
+    content: ok
+      ? `同步完成：商品 ${store.products.length} 个，分类 ${store.categories.length} 个`
+      : `同步失败：${store.syncError || '无法连接服务端'}`,
+    ok,
+  })
+  if (ok) ElMessage.success('同步完成')
+  else ElMessage.error(`同步失败：${store.syncError || '无法连接服务端'}`)
+  syncing.value = false
 }
 
 // 启动时恢复本地设置；门店信息优先使用打印服务已保存的值
@@ -519,6 +543,8 @@ onMounted(() => {
   receiptPrinter.systemName = PrintService.storeInfo.receiptPrinterName || receiptPrinter.systemName
   loadSystemPrinters()
   refreshPrinterStatus()
+  // 初始化同步状态卡片
+  refreshSyncInfo()
 })
 </script>
 
