@@ -128,16 +128,20 @@ class RefundService:
                 raise ValueError("退款金额无效")
             order.status = "partially_refunded"
 
-        record = RefundRecord(
-            refund_no=RefundService._build_refund_no(),
-            order_id=order.id,
-            order_no=order.order_no,
-            refund_type=data.refund_type,
-            amount=amount,
-            reason=data.reason,
-            cashier_id=data.cashier_id or order.cashier_id,
-            authorizer_id=data.authorizer_id,
-        )
+        record_kwargs = {
+            "refund_no": data.refund_no or RefundService._build_refund_no(),
+            "order_id": order.id,
+            "order_no": order.order_no,
+            "refund_type": data.refund_type,
+            "amount": amount,
+            "reason": data.reason,
+            "cashier_id": data.cashier_id or order.cashier_id,
+            "authorizer_id": data.authorizer_id,
+        }
+        # 离线补传时保留收银端原始退款时间
+        if data.created_at is not None:
+            record_kwargs["created_at"] = data.created_at
+        record = RefundRecord(**record_kwargs)
         for item in items:
             record.items.append(
                 RefundItem(

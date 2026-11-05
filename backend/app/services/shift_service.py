@@ -121,6 +121,42 @@ class ShiftService:
         )
 
     @staticmethod
+    def sync(db: Session, items: list) -> int:
+        """批量补传离线班次：按班次主键幂等写入或更新。
+
+        :param db: 数据库会话
+        :param items: 班次快照列表（ShiftSyncItem）
+        :return: 成功处理的班次数
+        """
+        synced = 0
+        for item in items:
+            shift = db.get(ShiftSession, item.id)
+            if shift:
+                # 已存在则补全交班信息与本地统计
+                shift.end_at = item.end_at or shift.end_at
+                shift.status = item.status
+                shift.total_sales = item.total_sales
+                shift.order_count = item.order_count
+                shift.base_cash = item.base_cash
+            else:
+                db.add(
+                    ShiftSession(
+                        id=item.id,
+                        cashier_id=item.cashier_id,
+                        store_id=item.store_id,
+                        start_at=item.start_at,
+                        end_at=item.end_at,
+                        base_cash=item.base_cash,
+                        total_sales=item.total_sales,
+                        order_count=item.order_count,
+                        status=item.status,
+                    )
+                )
+            synced += 1
+        db.flush()
+        return synced
+
+    @staticmethod
     def close(db: Session, shift: ShiftSession, actual_cash: float | None) -> ShiftSummaryOut:
         """交班：写入交班时间、销售汇总并置为已交班。
 

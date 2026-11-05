@@ -1,5 +1,7 @@
 """订单明细创建请求模型。"""
 
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -8,6 +10,10 @@ class OrderItemCreate(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    # 明细主键（离线收银端生成的雪花 ID，联网补传时保留以支持后续退货）
+    id: int | None = None
+    # 下单时间（离线补传时保留原始时间）
+    created_at: datetime | None = None
     # 商品 ID（可空，商品删除后保留名称快照）
     product_id: int | None = None
     # 商品名称

@@ -92,8 +92,8 @@ def _serialize(
         out = OrderOut.model_validate(order)
         out.member_mobile = mobiles.get(order.member_id) if order.member_id else None
         out.refunded_amount = totals.get(order.id, 0)
-        # 标记已退货明细，收银端据此禁用重复退货
-        refunded_ids = refunded_map.get(order.id, set())
+        # 标记已退货明细，收银端据此禁用重复退货（输出 ID 为字符串，需统一类型比较）
+        refunded_ids = {str(item_id) for item_id in refunded_map.get(order.id, set())}
         for item in out.items:
             item.refunded = item.id in refunded_ids
         result.append(out)
@@ -108,34 +108,42 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
     if existing:
         return _serialize(db, [existing])[0]
 
-    # 创建订单主记录
-    order = Order(
-        order_no=data.order_no,
-        store_id=data.store_id,
-        cashier_id=data.cashier_id,
-        shift_id=data.shift_id,
-        status=data.status,
-        total_amount=data.total_amount,
-        discount_amount=data.discount_amount,
-        pay_details=data.pay_details,
-        member_id=data.member_id,
-        remark=data.remark,
-        synced=True,
-    )
-    # 创建订单明细
+    # 创建订单主记录（离线补传时沿用收银端生成的 ID 与下单时间）
+    order_kwargs = {
+        "order_no": data.order_no,
+        "store_id": data.store_id,
+        "cashier_id": data.cashier_id,
+        "shift_id": data.shift_id,
+        "status": data.status,
+        "total_amount": data.total_amount,
+        "discount_amount": data.discount_amount,
+        "pay_details": data.pay_details,
+        "member_id": data.member_id,
+        "remark": data.remark,
+        "synced": True,
+    }
+    if data.id is not None:
+        order_kwargs["id"] = data.id
+    if data.created_at is not None:
+        order_kwargs["created_at"] = data.created_at
+    order = Order(**order_kwargs)
+    # 创建订单明细（同样保留离线端生成的明细 ID 与时间）
     for item in data.items:
-        order.items.append(
-            OrderItem(
-                product_id=item.product_id,
-                name=item.name,
-                qty=item.qty,
-                weight_kg=item.weight_kg,
-                unit_price=item.unit_price,
-                amount=item.amount,
-                is_weighted=item.is_weighted,
-                label_printed=item.label_printed,
-            )
-        )
+        item_kwargs = {
+            "product_id": item.product_id,
+            "name": item.name,
+            "qty": item.qty,
+            "weight_kg": item.weight_kg,
+            "unit_price": item.unit_price,
+            "amount": item.amount,
+            "is_weighted": item.is_weighted,
+            "label_printed": item.label_printed,
+        }
+        if item.id is not None:
+            item_kwargs["id"] = item.id
+        if item.created_at is not None:
+            item_kwargs["created_at"] = item.created_at
+        order.items.append(OrderItem(**item_kwargs))
     db.add(order)
     # 先落库主表以获取订单 ID，再由库存服务按明细扣减库存
     db.flush()
@@ -199,6 +207,13 @@ def refund_order(order_no: str, data: RefundCreate, db: Session = Depends(get_db
     order = db.scalar(select(Order).where(Order.order_no == order_no))
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
+    # 幂等检查：离线补传的退款单号已存在则直接返回原记录
+    if data.refund_no:
+        existing = db.scalar(
+            select(RefundRecord).where(RefundRecord.refund_no == data.refund_no)
+        )
+        if existing:
+            return existing
     try:
         record = RefundService.refund(db, order, data)
     except ValueError as exc:

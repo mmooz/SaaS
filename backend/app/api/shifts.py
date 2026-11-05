@@ -9,6 +9,7 @@ from app.schemas.shift_close import ShiftClose
 from app.schemas.shift_open import ShiftOpen
 from app.schemas.shift_out import ShiftOut
 from app.schemas.shift_summary_out import ShiftSummaryOut
+from app.schemas.shift_sync_request import ShiftSyncRequest
 from app.services.operation_log_service import OperationLogService
 from app.services.shift_service import ShiftService
 
@@ -26,6 +27,14 @@ def open_shift(data: ShiftOpen, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(shift)
     return shift
+
+
+@router.post("/sync", response_model=dict)
+def sync_shifts(data: ShiftSyncRequest, db: Session = Depends(get_db)):
+    """离线收银端批量补传班次（按班次主键幂等写入）。"""
+    count = ShiftService.sync(db, data.shifts)
+    db.commit()
+    return {"synced": count}
 
 
 @router.get("/current", response_model=ShiftOut | None)
