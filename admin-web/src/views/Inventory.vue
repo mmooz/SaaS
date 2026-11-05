@@ -18,33 +18,36 @@
         <div class="head-actions">
           <el-input
             v-model="queryKeyword"
-            placeholder="搜索商品 / 分类"
+            placeholder="搜索商品 / 条码"
             clearable
             :prefix-icon="Search"
             style="width: 240px"
+            @keyup.enter="handleStockSearch"
+            @clear="handleStockSearch"
           />
-          <el-button type="primary" :icon="Refresh" @click="ElMessage.success('库存已刷新')">刷新库存</el-button>
+          <el-button type="primary" :icon="Refresh" @click="refreshAll">刷新库存</el-button>
         </div>
       </div>
-      <el-table :data="filteredStocks" v-loading="loading" empty-text="暂无库存数据">
+      <el-table :data="stocks" v-loading="loading" empty-text="暂无库存数据">
         <el-table-column prop="name" label="商品" min-width="140" show-overflow-tooltip />
+        <el-table-column prop="barcode" label="条码" width="130" />
         <el-table-column prop="category" label="分类" width="100" align="center" />
         <el-table-column label="库存" width="110" align="right">
           <template #default="{ row }">
-            <span class="num" :class="{ 'text-danger': row.status !== '充足' }">{{ row.stock }}</span>
+            <span class="num" :class="{ 'text-danger': row.status !== 'ok' }">{{ row.stock }}</span>
           </template>
         </el-table-column>
         <el-table-column label="安全库存" width="110" align="right">
-          <template #default="{ row }"><span class="num">{{ row.safety }}</span></template>
+          <template #default="{ row }"><span class="num">{{ row.safety_stock }}</span></template>
         </el-table-column>
         <el-table-column prop="unit" label="单位" width="70" align="center" />
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="stockTagType(row.status)" effect="light">{{ row.status }}</el-tag>
+            <el-tag size="small" :type="stockTagType(row.status)" effect="light">{{ stockText(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="updatedAt" label="更新时间" width="110" align="right">
-          <template #default="{ row }"><span class="cell-time">{{ row.updatedAt }}</span></template>
+        <el-table-column label="更新时间" width="150" align="right">
+          <template #default="{ row }"><span class="cell-time">{{ fmtTime(row.updated_at) }}</span></template>
         </el-table-column>
         <el-table-column label="操作" width="120" align="center" fixed="right">
           <template #default="{ row }">
@@ -53,6 +56,18 @@
           </template>
         </el-table-column>
       </el-table>
+      <div class="pagination-wrap">
+        <el-pagination
+          v-model:current-page="stockPage"
+          v-model:page-size="stockPageSize"
+          :total="stockTotal"
+          :page-sizes="[20, 50, 100]"
+          layout="total, prev, pager, next"
+          background
+          @current-change="loadInventory"
+          @size-change="handleStockSearch"
+        />
+      </div>
     </div>
 
     <!-- ========== 2. 采购入库 ========== -->
@@ -61,28 +76,16 @@
         <h3>入库单列表</h3>
         <el-button type="primary" :icon="Plus" @click="openPurchaseDialog()">新建入库单</el-button>
       </div>
-      <el-table :data="purchaseOrders" empty-text="暂无入库单">
-        <el-table-column prop="orderNo" label="单号" width="170" />
-        <el-table-column prop="supplier" label="供应商" width="140" />
-        <el-table-column label="商品数" width="90" align="center">
-          <template #default="{ row }"><span class="num">{{ row.itemCount }}</span></template>
-        </el-table-column>
-        <el-table-column label="总金额" width="110" align="right">
-          <template #default="{ row }"><span class="num">¥{{ row.total.toFixed(2) }}</span></template>
-        </el-table-column>
-        <el-table-column prop="handler" label="经手人" width="90" align="center" />
-        <el-table-column label="时间" width="110" align="right">
+      <el-table :data="inboundRecords" empty-text="暂无入库记录">
+        <el-table-column label="时间" width="150">
           <template #default="{ row }"><span class="cell-time">{{ row.time }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.status === '已入库' ? 'success' : 'warning'" effect="light">{{ row.status }}</el-tag>
-          </template>
+        <el-table-column prop="product" label="商品" min-width="150" />
+        <el-table-column label="入库数量" width="120" align="right">
+          <template #default="{ row }"><span class="num text-success">+{{ row.qty }}{{ row.unit }}</span></template>
         </el-table-column>
-        <el-table-column label="操作" width="90" align="center" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small">详情</el-button>
-          </template>
+        <el-table-column label="来源" width="130" align="center">
+          <template #default="{ row }"><span class="cell-time">{{ row.refNo }}</span></template>
         </el-table-column>
       </el-table>
     </div>
@@ -93,29 +96,20 @@
         <h3>盘点记录</h3>
         <el-button type="primary" :icon="Plus" @click="openCheckDialog()">新建盘点单</el-button>
       </div>
-      <el-table :data="checkRecords" empty-text="暂无盘点记录">
-        <el-table-column prop="orderNo" label="单号" width="170" />
-        <el-table-column label="盘点商品数" width="110" align="center">
-          <template #default="{ row }"><span class="num">{{ row.itemCount }}</span></template>
-        </el-table-column>
-        <el-table-column label="差异数量" width="110" align="center">
-          <template #default="{ row }">
-            <span class="num" :class="row.diff > 0 ? 'text-success' : 'text-danger'">{{ row.diff > 0 ? '+' : '' }}{{ row.diff }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="operator" label="操作人" width="90" align="center" />
-        <el-table-column label="时间" width="110" align="right">
+      <el-table :data="stocktakeRecords" empty-text="暂无盘点记录">
+        <el-table-column label="时间" width="150">
           <template #default="{ row }"><span class="cell-time">{{ row.time }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
+        <el-table-column prop="product" label="商品" min-width="150" />
+        <el-table-column label="差异数量" width="120" align="right">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.status === '已盘点' ? 'success' : 'info'" effect="light">{{ row.status }}</el-tag>
+            <span class="num" :class="row.qty > 0 ? 'text-success' : row.qty < 0 ? 'text-danger' : ''">
+              {{ row.qty > 0 ? '+' : '' }}{{ row.qty }}{{ row.unit }}
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="90" align="center" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small">详情</el-button>
-          </template>
+        <el-table-column label="操作人" width="100" align="center">
+          <template #default="{ row }">{{ row.operator }}</template>
         </el-table-column>
       </el-table>
     </div>
@@ -126,25 +120,16 @@
         <h3>报损记录</h3>
         <el-button type="primary" :icon="Plus" @click="openLossDialog()">报损登记</el-button>
       </div>
-      <el-table :data="lossRecords" empty-text="暂无报损记录">
-        <el-table-column prop="orderNo" label="单号" width="170" />
-        <el-table-column prop="product" label="商品" min-width="130" />
-        <el-table-column label="数量" width="90" align="right">
-          <template #default="{ row }"><span class="num text-danger">{{ row.count }}{{ row.unit }}</span></template>
-        </el-table-column>
-        <el-table-column label="原因" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag size="small" :type="lossReasonTag(row.reason)" effect="light">{{ row.reason }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="handler" label="经手人" width="90" align="center" />
-        <el-table-column label="时间" width="110" align="right">
+      <el-table :data="breakageRecords" empty-text="暂无报损记录">
+        <el-table-column label="时间" width="150">
           <template #default="{ row }"><span class="cell-time">{{ row.time }}</span></template>
         </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.status === '已报损' ? 'danger' : 'warning'" effect="light">{{ row.status }}</el-tag>
-          </template>
+        <el-table-column prop="product" label="商品" min-width="150" />
+        <el-table-column label="报损数量" width="120" align="right">
+          <template #default="{ row }"><span class="num text-danger">{{ Math.abs(row.qty) }}{{ row.unit }}</span></template>
+        </el-table-column>
+        <el-table-column label="操作人" width="100" align="center">
+          <template #default="{ row }">{{ row.operator }}</template>
         </el-table-column>
       </el-table>
     </div>
@@ -162,26 +147,25 @@
         />
       </div>
       <el-table :data="filteredFlows" empty-text="暂无变动记录">
-        <el-table-column label="时间" width="110" align="right">
+        <el-table-column label="时间" width="150" align="right">
           <template #default="{ row }"><span class="cell-time">{{ row.time }}</span></template>
         </el-table-column>
         <el-table-column prop="product" label="商品" min-width="130" />
         <el-table-column label="类型" width="100" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="flowTypeTag(row.type)" effect="light">{{ row.type }}</el-tag>
+            <el-tag size="small" :type="flowTypeTag(row.typeCode)" effect="light">{{ row.type }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="数量" width="100" align="right">
+        <el-table-column label="数量" width="110" align="right">
           <template #default="{ row }">
-            <span class="num" :class="row.change > 0 ? 'text-success' : 'text-danger'">
-              {{ row.change > 0 ? '+' : '' }}{{ row.change }}{{ row.unit }}
+            <span class="num" :class="row.qty > 0 ? 'text-success' : 'text-danger'">
+              {{ row.qty > 0 ? '+' : '' }}{{ row.qty }}{{ row.unit }}
             </span>
           </template>
         </el-table-column>
-        <el-table-column label="来源单号" width="170" align="center">
+        <el-table-column label="来源" width="140" align="center">
           <template #default="{ row }"><span class="cell-time">{{ row.refNo }}</span></template>
         </el-table-column>
-        <el-table-column prop="note" label="备注" min-width="140" show-overflow-tooltip />
       </el-table>
     </div>
 
@@ -189,16 +173,16 @@
     <el-dialog v-model="purchaseDialog" title="新建入库单" width="640px" destroy-on-close>
       <div class="dialog-tip">选择商品并填写进货数量与进价，可添加多行商品明细。</div>
       <el-table :data="purchaseItems" empty-text="请添加入库商品" class="dialog-table">
-        <el-table-column label="商品" width="170">
+        <el-table-column label="商品" width="200">
           <template #default="{ row }">
-            <el-select v-model="row.product" filterable placeholder="选择商品" size="small">
-              <el-option v-for="p in productOptions" :key="p.name" :label="p.name" :value="p.name" />
+            <el-select v-model="row.productId" filterable placeholder="选择商品" size="small">
+              <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
             </el-select>
           </template>
         </el-table-column>
         <el-table-column label="数量" width="140">
           <template #default="{ row }">
-            <el-input-number v-model="row.count" :min="0.01" :precision="2" :step="1" size="small" style="width: 120px" />
+            <el-input-number v-model="row.qty" :min="0.01" :precision="2" :step="1" size="small" style="width: 120px" />
           </template>
         </el-table-column>
         <el-table-column label="进价(元)" width="150">
@@ -208,7 +192,7 @@
         </el-table-column>
         <el-table-column label="小计" width="90" align="right">
           <template #default="{ row }">
-            <span class="num">¥{{ (row.count * row.price).toFixed(2) }}</span>
+            <span class="num">¥{{ (row.qty * row.price).toFixed(2) }}</span>
           </template>
         </el-table-column>
         <el-table-column width="60" align="center">
@@ -230,15 +214,15 @@
     <el-dialog v-model="checkDialog" title="新建盘点单" width="640px" destroy-on-close>
       <div class="dialog-tip">填写账面数与实盘数，系统自动计算差异（实盘 - 账面）。</div>
       <el-table :data="checkItems" empty-text="请添加盘点商品" class="dialog-table">
-        <el-table-column label="商品" width="170">
+        <el-table-column label="商品" width="200">
           <template #default="{ row }">
-            <el-select v-model="row.product" filterable placeholder="选择商品" size="small">
-              <el-option v-for="p in productOptions" :key="p.name" :label="p.name" :value="p.name" />
+            <el-select v-model="row.productId" filterable placeholder="选择商品" size="small">
+              <el-option v-for="p in products" :key="p.id" :label="p.name" :value="p.id" />
             </el-select>
           </template>
         </el-table-column>
         <el-table-column label="账面数" width="120" align="right">
-          <template #default="{ row }"><span class="num">{{ row.book }}</span></template>
+          <template #default="{ row }"><span class="num">{{ productStock(row.productId) }}</span></template>
         </el-table-column>
         <el-table-column label="实盘数" width="140">
           <template #default="{ row }">
@@ -247,8 +231,8 @@
         </el-table-column>
         <el-table-column label="差异" width="100" align="right">
           <template #default="{ row }">
-            <span class="num" :class="row.actual - row.book === 0 ? '' : row.actual - row.book > 0 ? 'text-success' : 'text-danger'">
-              {{ row.actual - row.book > 0 ? '+' : '' }}{{ (row.actual - row.book).toFixed(2) }}
+            <span class="num" :class="row.actual - productStock(row.productId) === 0 ? '' : row.actual - productStock(row.productId) > 0 ? 'text-success' : 'text-danger'">
+              {{ row.actual - productStock(row.productId) > 0 ? '+' : '' }}{{ (row.actual - productStock(row.productId)).toFixed(2) }}
             </span>
           </template>
         </el-table-column>
@@ -271,14 +255,14 @@
     <el-dialog v-model="lossDialog" title="报损登记" width="480px" destroy-on-close>
       <el-form label-width="80px">
         <el-form-item label="商品" required>
-          <el-select v-model="lossForm.product" filterable placeholder="选择商品" style="width: 100%">
-            <el-option v-for="p in productOptions" :key="p.name" :label="p.name" :value="p.name" />
+          <el-select v-model="lossForm.productId" filterable placeholder="选择商品" style="width: 100%">
+            <el-option v-for="p in products" :key="p.id" :label="`${p.name}（库存 ${p.stock}${p.unit}）`" :value="p.id" />
           </el-select>
         </el-form-item>
         <el-form-item label="数量" required>
-          <el-input-number v-model="lossForm.count" :min="0.01" :precision="2" :step="1" style="width: 200px" />
+          <el-input-number v-model="lossForm.qty" :min="0.01" :precision="2" :step="1" style="width: 200px" />
         </el-form-item>
-        <el-form-item label="原因" required>
+        <el-form-item label="原因">
           <el-radio-group v-model="lossForm.reason">
             <el-radio value="损耗">损耗</el-radio>
             <el-radio value="过期">过期</el-radio>
@@ -298,202 +282,343 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Delete, Search, Refresh } from '@element-plus/icons-vue'
+import {
+  fetchInventory,
+  fetchInventoryMovements,
+  fetchProducts,
+  inventoryBreakage,
+  inventoryInbound,
+  inventoryStocktake,
+} from '../api'
 
 // 当前激活的 tab
 const activeTab = ref('query')
+// 库存列表加载态
 const loading = ref(false)
 
-// ---------- 库存查询 ----------
-// 模拟数据：库存列表（低库存标红）
-const stocks = ref([
-  { name: '上海青', category: '蔬菜', stock: 2.4, safety: 10, unit: 'kg', status: '紧缺', updatedAt: '11-05 18:00' },
-  { name: '西红柿', category: '蔬菜', stock: 5, safety: 15, unit: 'kg', status: '不足', updatedAt: '11-05 18:00' },
-  { name: '黄瓜', category: '蔬菜', stock: 26, safety: 20, unit: 'kg', status: '充足', updatedAt: '11-05 18:00' },
-  { name: '土豆', category: '蔬菜', stock: 12, safety: 40, unit: 'kg', status: '不足', updatedAt: '11-05 18:00' },
-  { name: '蜜桔', category: '水果', stock: 6.5, safety: 20, unit: 'kg', status: '紧缺', updatedAt: '11-05 18:00' },
-  { name: '香蕉', category: '水果', stock: 38, safety: 25, unit: 'kg', status: '充足', updatedAt: '11-05 18:00' },
-  { name: '苹果', category: '水果', stock: 55, safety: 30, unit: 'kg', status: '充足', updatedAt: '11-05 18:00' },
-  { name: '五花肉', category: '肉类', stock: 3.2, safety: 8, unit: 'kg', status: '紧缺', updatedAt: '11-05 18:00' },
-  { name: '前腿肉', category: '肉类', stock: 22, safety: 10, unit: 'kg', status: '充足', updatedAt: '11-05 18:00' },
-  { name: '鲜鸡蛋(盒)', category: '蛋奶', stock: 8, safety: 30, unit: '盒', status: '紧缺', updatedAt: '11-05 18:00' },
-])
+/**
+ * 时间格式化（ISO → YYYY-MM-DD HH:mm）
+ * @param {string|null} value 时间
+ * @returns {string} 展示时间
+ */
+function fmtTime(value) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').slice(0, 16)
+}
+
+/**
+ * 数值保留三位小数
+ * @param {number} n 原值
+ * @returns {number} 保留三位后的数值
+ */
+const round3 = (n) => Math.round(n * 1000) / 1000
+
+// 库存状态：后端值 → 中文文案
+const STATUS_TO_TEXT = { out: '紧缺', low: '不足', ok: '充足' }
+
+/**
+ * 库存状态转中文
+ * @param {string} s 后端状态值
+ * @returns {string} 中文状态
+ */
+const stockText = (s) => STATUS_TO_TEXT[s] || s
 
 // 库存状态标签：充足绿 / 不足橙 / 紧缺红
-const stockTagType = (s) => (s === '充足' ? 'success' : s === '不足' ? 'warning' : 'danger')
+const stockTagType = (s) => (s === 'ok' ? 'success' : s === 'low' ? 'warning' : 'danger')
 
-// 搜索关键词过滤
+// 流水类型：后端值 → 中文文案
+const FLOW_TYPE_TO_TEXT = { inbound: '入库', sale: '销售', stocktake: '盘点', breakage: '报损' }
+
+/**
+ * 流水类型标签颜色
+ * @param {string} t 后端类型
+ * @returns {string} el-tag 类型
+ */
+const flowTypeTag = (t) =>
+  t === 'inbound' ? 'success' : t === 'sale' ? 'primary' : t === 'stocktake' ? 'warning' : 'danger'
+
+/* ---------------- 商品选项 ---------------- */
+
+// 商品列表（下拉与盘点账面数使用）
+const products = ref([])
+
+/**
+ * 加载商品列表
+ * @returns {Promise<void>}
+ */
+async function loadProducts() {
+  try {
+    const data = await fetchProducts()
+    products.value = data.items || []
+  } catch (err) {
+    ElMessage.error(`商品加载失败：${err.message}`)
+  }
+}
+
+/**
+ * 按商品 ID 取商品
+ * @param {number} id 商品 ID
+ * @returns {object|null} 商品
+ */
+const productById = (id) => products.value.find((p) => p.id === id) || null
+
+/**
+ * 按商品 ID 取当前库存数
+ * @param {number} id 商品 ID
+ * @returns {number} 库存数
+ */
+const productStock = (id) => Number(productById(id)?.stock || 0)
+
+/* ---------------- 库存查询 ---------------- */
+
+// 搜索关键字
 const queryKeyword = ref('')
-const filteredStocks = computed(() => {
-  const k = queryKeyword.value.trim()
-  if (!k) return stocks.value
-  return stocks.value.filter((s) => s.name.includes(k) || s.category.includes(k))
-})
+// 库存列表
+const stocks = ref([])
+// 当前页码
+const stockPage = ref(1)
+// 每页条数
+const stockPageSize = ref(20)
+// 库存总数
+const stockTotal = ref(0)
 
-// ---------- 采购入库 ----------
-// 模拟数据：入库单列表
-const purchaseOrders = ref([
-  { orderNo: 'RK20261105-003', supplier: '绿源蔬菜基地', itemCount: 8, total: 1820.5, handler: '王店长', time: '11-05 14:20', status: '已入库' },
-  { orderNo: 'RK20261105-002', supplier: '鲜丰果业', itemCount: 5, total: 965.0, handler: '李采购', time: '11-05 10:05', status: '已入库' },
-  { orderNo: 'RK20261105-001', supplier: '双汇冷鲜肉', itemCount: 3, total: 1520.0, handler: '李采购', time: '11-05 08:30', status: '已入库' },
-  { orderNo: 'RK20261104-007', supplier: '绿源蔬菜基地', itemCount: 10, total: 2100.0, handler: '王店长', time: '11-04 16:45', status: '待入库' },
-])
+/**
+ * 加载库存分页数据
+ * @returns {Promise<void>}
+ */
+async function loadInventory() {
+  loading.value = true
+  try {
+    const data = await fetchInventory({
+      keyword: queryKeyword.value,
+      page: stockPage.value,
+      pageSize: stockPageSize.value,
+    })
+    stocks.value = data.items || []
+    stockTotal.value = data.total || 0
+  } catch (err) {
+    ElMessage.error(`库存加载失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
+}
 
-// 入库单弹窗与明细行
+/**
+ * 搜索库存：重置到第一页后加载
+ */
+function handleStockSearch() {
+  stockPage.value = 1
+  loadInventory()
+}
+
+/* ---------------- 库存流水 ---------------- */
+
+// 入库记录
+const inboundRecords = ref([])
+// 盘点记录
+const stocktakeRecords = ref([])
+// 报损记录
+const breakageRecords = ref([])
+// 全部变动流水
+const flows = ref([])
+
+/**
+ * 库存流水转展示行
+ * @param {object} m 后端流水
+ * @returns {object} 展示行
+ */
+function toFlowRow(m) {
+  const product = productById(m.product_id)
+  return {
+    id: m.id,
+    time: fmtTime(m.created_at),
+    product: m.product_name || '—',
+    type: FLOW_TYPE_TO_TEXT[m.type] || m.type,
+    typeCode: m.type,
+    qty: round3(Number(m.weight_kg ?? m.qty ?? 0)),
+    unit: product?.unit || '',
+    refNo: m.ref_id ? `#${m.ref_id}` : '—',
+    operator: m.operator_id ? `操作员 ${m.operator_id}` : '后台',
+  }
+}
+
+/**
+ * 加载各类库存流水（入库 / 盘点 / 报损 / 全部）
+ * @returns {Promise<void>}
+ */
+async function loadMovements() {
+  try {
+    const [inbound, stocktake, breakage, all] = await Promise.all([
+      fetchInventoryMovements({ type: 'inbound', pageSize: 50 }),
+      fetchInventoryMovements({ type: 'stocktake', pageSize: 50 }),
+      fetchInventoryMovements({ type: 'breakage', pageSize: 50 }),
+      fetchInventoryMovements({ pageSize: 50 }),
+    ])
+    inboundRecords.value = (inbound.items || []).map(toFlowRow)
+    stocktakeRecords.value = (stocktake.items || []).map(toFlowRow)
+    breakageRecords.value = (breakage.items || []).map(toFlowRow)
+    flows.value = (all.items || []).map(toFlowRow)
+  } catch (err) {
+    ElMessage.error(`库存流水加载失败：${err.message}`)
+  }
+}
+
+/**
+ * 刷新商品、库存与流水
+ */
+function refreshAll() {
+  loadProducts()
+  loadInventory()
+  loadMovements()
+  ElMessage.success('库存已刷新')
+}
+
+/* ---------------- 采购入库 ---------------- */
+
+// 入库弹窗显隐
 const purchaseDialog = ref(false)
+// 入库明细行
 const purchaseItems = ref([])
 
-// 商品候选列表（模拟）
-const productOptions = [
-  { name: '上海青', unit: 'kg' },
-  { name: '西红柿', unit: 'kg' },
-  { name: '黄瓜', unit: 'kg' },
-  { name: '土豆', unit: 'kg' },
-  { name: '蜜桔', unit: 'kg' },
-  { name: '香蕉', unit: 'kg' },
-  { name: '苹果', unit: 'kg' },
-  { name: '五花肉', unit: 'kg' },
-  { name: '前腿肉', unit: 'kg' },
-  { name: '鲜鸡蛋(盒)', unit: '盒' },
-]
-
-// 打开入库弹窗：可从库存列表带出商品
+/**
+ * 打开入库弹窗：可从库存行带出商品
+ * @param {object} [row] 库存行
+ */
 const openPurchaseDialog = (row) => {
-  purchaseItems.value = row ? [{ product: row.name, count: 1, price: 5 }] : []
+  purchaseItems.value = row
+    ? [{ productId: row.product_id, qty: 1, price: Number(row.cost_price || 5) }]
+    : []
   purchaseDialog.value = true
 }
 
-// 添加入库行
-const addPurchaseRow = () => purchaseItems.value.push({ product: '', count: 1, price: 5 })
+/**
+ * 追加一行入库明细
+ */
+const addPurchaseRow = () => purchaseItems.value.push({ productId: null, qty: 1, price: 5 })
 
 // 入库合计金额
-const purchaseTotal = computed(() =>
-  purchaseItems.value.reduce((sum, r) => sum + r.count * r.price, 0)
-)
+const purchaseTotal = computed(() => purchaseItems.value.reduce((sum, r) => sum + r.qty * r.price, 0))
 
-// 提交入库（校验商品非空后写入列表，示意）
-const submitPurchase = () => {
-  if (purchaseItems.value.some((r) => !r.product)) {
+/**
+ * 提交入库：逐行调用入库接口
+ * @returns {Promise<void>}
+ */
+async function submitPurchase() {
+  if (purchaseItems.value.some((r) => !r.productId)) {
     ElMessage.warning('请完整选择入库商品')
     return
   }
-  purchaseOrders.value.unshift({
-    orderNo: `RK20261105-${String(purchaseOrders.value.length + 1).padStart(3, '0')}`,
-    supplier: '绿源蔬菜基地',
-    itemCount: purchaseItems.value.length,
-    total: purchaseTotal.value,
-    handler: '王店长',
-    time: '11-05 18:30',
-    status: '待入库',
-  })
-  ElMessage.success('入库单已提交')
-  purchaseDialog.value = false
+  try {
+    for (const row of purchaseItems.value) {
+      await inventoryInbound({ productId: row.productId, qty: row.qty, costPrice: row.price })
+    }
+    ElMessage.success('入库完成，库存已更新')
+    purchaseDialog.value = false
+    refreshAll()
+  } catch (err) {
+    ElMessage.error(`入库失败：${err.message}`)
+  }
 }
 
-// ---------- 盘点 ----------
-// 模拟数据：盘点记录
-const checkRecords = ref([
-  { orderNo: 'PD20261105-001', itemCount: 6, diff: -1.2, operator: '王店长', time: '11-05 09:00', status: '已盘点' },
-  { orderNo: 'PD20261104-001', itemCount: 4, diff: 2.5, operator: '张收银', time: '11-04 21:00', status: '已盘点' },
-  { orderNo: 'PD20261103-001', itemCount: 8, diff: 0, operator: '王店长', time: '11-03 09:00', status: '盘点中' },
-])
+/* ---------------- 盘点 ---------------- */
 
-// 盘点弹窗与明细行
+// 盘点弹窗显隐
 const checkDialog = ref(false)
+// 盘点明细行
 const checkItems = ref([])
 
+/**
+ * 打开盘点弹窗
+ */
 const openCheckDialog = () => {
   checkItems.value = []
   checkDialog.value = true
 }
-const addCheckRow = () => checkItems.value.push({ product: '', book: 10, actual: 10 })
 
-// 提交盘点
-const submitCheck = () => {
-  if (checkItems.value.some((r) => !r.product)) {
+/**
+ * 追加一行盘点明细
+ */
+const addCheckRow = () => checkItems.value.push({ productId: null, actual: 0 })
+
+/**
+ * 提交盘点：逐行按实盘数覆盖库存
+ * @returns {Promise<void>}
+ */
+async function submitCheck() {
+  if (checkItems.value.some((r) => !r.productId)) {
     ElMessage.warning('请完整选择盘点商品')
     return
   }
-  const totalDiff = checkItems.value.reduce((sum, r) => sum + (r.actual - r.book), 0)
-  checkRecords.value.unshift({
-    orderNo: `PD20261105-00${checkRecords.value.length + 1}`,
-    itemCount: checkItems.value.length,
-    diff: Number(totalDiff.toFixed(2)),
-    operator: '王店长',
-    time: '11-05 18:30',
-    status: '盘点中',
-  })
-  ElMessage.success('盘点单已提交')
-  checkDialog.value = false
+  try {
+    for (const row of checkItems.value) {
+      await inventoryStocktake({ productId: row.productId, actual: row.actual })
+    }
+    ElMessage.success('盘点完成，库存已按实盘数更新')
+    checkDialog.value = false
+    refreshAll()
+  } catch (err) {
+    ElMessage.error(`盘点失败：${err.message}`)
+  }
 }
 
-// ---------- 报损 ----------
-// 模拟数据：报损记录
-const lossRecords = ref([
-  { orderNo: 'BS20261105-002', product: '上海青', count: 2.3, unit: 'kg', reason: '损耗', handler: '张收银', time: '11-05 16:10', status: '已报损' },
-  { orderNo: 'BS20261105-001', product: '鲜鸡蛋(盒)', count: 3, unit: '盒', reason: '损坏', handler: '张收银', time: '11-05 11:22', status: '已报损' },
-  { orderNo: 'BS20261104-001', product: '香蕉', count: 5, unit: 'kg', reason: '过期', handler: '王店长', time: '11-04 20:05', status: '待确认' },
-])
+/* ---------------- 报损 ---------------- */
 
-// 报损原因标签：损耗橙 / 过期红 / 损坏红
-const lossReasonTag = (r) => (r === '损耗' ? 'warning' : 'danger')
-
-// 报损弹窗表单
+// 报损弹窗显隐
 const lossDialog = ref(false)
-const lossForm = reactive({ product: '', count: 1, reason: '损耗', note: '' })
+// 报损表单
+const lossForm = reactive({ productId: null, qty: 1, reason: '损耗', note: '' })
 
+/**
+ * 打开报损弹窗：可从库存行带出商品
+ * @param {object} [row] 库存行
+ */
 const openLossDialog = (row) => {
-  lossForm.product = row ? row.name : ''
-  lossForm.count = 1
+  lossForm.productId = row ? row.product_id : null
+  lossForm.qty = 1
   lossForm.reason = '损耗'
   lossForm.note = ''
   lossDialog.value = true
 }
 
-// 确认报损
-const submitLoss = () => {
-  if (!lossForm.product) {
+/**
+ * 提交报损登记
+ * @returns {Promise<void>}
+ */
+async function submitLoss() {
+  if (!lossForm.productId) {
     ElMessage.warning('请选择报损商品')
     return
   }
-  lossRecords.value.unshift({
-    orderNo: `BS20261105-00${lossRecords.value.length + 1}`,
-    product: lossForm.product,
-    count: lossForm.count,
-    unit: 'kg',
-    reason: lossForm.reason,
-    handler: '王店长',
-    time: '11-05 18:30',
-    status: '待确认',
-  })
-  ElMessage.success('报损登记已提交')
-  lossDialog.value = false
+  try {
+    await inventoryBreakage({ productId: lossForm.productId, qty: lossForm.qty })
+    ElMessage.success('报损登记完成，库存已扣减')
+    lossDialog.value = false
+    refreshAll()
+  } catch (err) {
+    ElMessage.error(`报损失败：${err.message}`)
+  }
 }
 
-// ---------- 变动流水 ----------
-// 模拟数据：库存变动流水（入库绿 / 销售蓝 / 盘点橙 / 报损红）
-const flows = ref([
-  { time: '11-05 18:20', product: '上海青', type: '入库', change: 20, unit: 'kg', refNo: 'RK20261105-003', note: '采购入库' },
-  { time: '11-05 17:45', product: '五花肉', type: '销售', change: -0.42, unit: 'kg', refNo: 'SO20261105-0211', note: '称重销售' },
-  { time: '11-05 16:10', product: '上海青', type: '报损', change: -2.3, unit: 'kg', refNo: 'BS20261105-002', note: '损耗报损' },
-  { time: '11-05 09:00', product: '土豆', type: '盘点', change: -1.2, unit: 'kg', refNo: 'PD20261105-001', note: '盘亏调整' },
-  { time: '11-05 08:30', product: '五花肉', type: '入库', change: 15, unit: 'kg', refNo: 'RK20261105-001', note: '采购入库' },
-  { time: '11-04 21:00', product: '蜜桔', type: '盘点', change: 2.5, unit: 'kg', refNo: 'PD20261104-001', note: '盘盈调整' },
-  { time: '11-04 19:30', product: '蜜桔', type: '销售', change: -1.6, unit: 'kg', refNo: 'SO20261104-0198', note: '称重销售' },
-  { time: '11-04 20:05', product: '香蕉', type: '报损', change: -5, unit: 'kg', refNo: 'BS20261104-001', note: '过期报损' },
-])
+/* ---------------- 变动流水搜索 ---------------- */
 
-// 变动类型标签：入库绿 / 销售蓝 / 盘点橙 / 报损红
-const flowTypeTag = (t) => (t === '入库' ? 'success' : t === '销售' ? 'primary' : t === '盘点' ? 'warning' : 'danger')
-
-// 流水搜索过滤
+// 流水搜索关键字
 const flowKeyword = ref('')
+
+// 按商品 / 来源 / 类型过滤流水
 const filteredFlows = computed(() => {
   const k = flowKeyword.value.trim()
   if (!k) return flows.value
   return flows.value.filter((f) => f.product.includes(k) || f.refNo.includes(k) || f.type.includes(k))
+})
+
+// 页面挂载：先加载商品（流水单位依赖商品信息），再加载库存与流水
+onMounted(async () => {
+  await loadProducts()
+  loadInventory()
+  loadMovements()
 })
 </script>
 
@@ -540,6 +665,12 @@ const filteredFlows = computed(() => {
 .text-success {
   color: var(--success);
   font-weight: 600;
+}
+/* 分页容器：右对齐 */
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
 }
 .dialog-tip {
   font-size: 12px;
