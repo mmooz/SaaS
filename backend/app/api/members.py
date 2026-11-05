@@ -1,11 +1,13 @@
 """会员管理 API：建档、查询、储值充值、消费扣款、积分调整与流水查询。"""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Member, MemberTransaction
+from app.models import Member, MemberTransaction, Order
 from app.schemas.member_consume import MemberConsume
 from app.schemas.member_create import MemberCreate
 from app.schemas.member_out import MemberOut
@@ -76,6 +78,112 @@ def list_members(
     }
 
 
+@router.get("/stats", response_model=dict)
+def member_stats(db: Session = Depends(get_db)):
+    """会员概览统计：总数、今日新增、储值总余额、本月充值及消费排行前十。"""
+    now = datetime.now()
+    today_start = datetime(now.year, now.month, now.day)
+    month_start = datetime(now.year, now.month, 1)
+
+    total = db.scalar(select(func.count()).select_from(Member)) or 0
+    new_today = (
+        db.scalar(
+            select(func.count()).select_from(Member).where(Member.created_at >= today_start)
+        )
+        or 0
+    )
+    balance_total = db.scalar(select(func.sum(Member.balance))) or 0
+    recharge_month = (
+        db.scalar(
+            select(func.sum(MemberTransaction.amount)).where(
+                MemberTransaction.type == "recharge",
+                MemberTransaction.created_at >= month_start,
+            )
+        )
+        or 0
+    )
+
+    # 消费排行前十：按累计消费金额倒序
+    top_members = db.scalars(
+        select(Member).order_by(Member.total_spent.desc()).limit(10)
+    ).all()
+    member_ids = [m.id for m in top_members]
+    order_counts: dict[int, int] = {}
+    month_spent: dict[int, float] = {}
+    if member_ids:
+        count_rows = db.execute(
+            select(Order.member_id, func.count(Order.id)).where(
+                Order.member_id.in_(member_ids), Order.status == "paid"
+            ).group_by(Order.member_id)
+        ).all()
+        order_counts = {mid: cnt for mid, cnt in count_rows}
+        month_rows = db.execute(
+            select(Order.member_id, func.sum(Order.total_amount)).where(
+                Order.member_id.in_(member_ids),
+                Order.status == "paid",
+                Order.created_at >= month_start,
+            ).group_by(Order.member_id)
+        ).all()
+        month_spent = {mid: float(amount or 0) for mid, amount in month_rows}
+
+    return {
+        "total": total,
+        "new_today": new_today,
+        "balance_total": round(balance_total, 2),
+        "recharge_this_month": round(recharge_month, 2),
+        "top": [
+            {
+                "id": m.id,
+                "mobile": m.mobile,
+                "name": m.name,
+                "level": m.level,
+                "points": m.points or 0,
+                "total_spent": round(m.total_spent or 0, 2),
+                "order_count": order_counts.get(m.id, 0),
+                "month_spent": round(month_spent.get(m.id, 0), 2),
+            }
+            for m in top_members
+        ],
+    }
+
+
+@router.get("/transactions/all", response_model=dict)
+def list_all_transactions(
+    member_id: int | None = None,
+    type: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+):
+    """分页查询全部会员流水（可按会员/类型筛选），用于后台充值/积分记录。"""
+    stmt = select(MemberTransaction)
+    if member_id:
+        stmt = stmt.where(MemberTransaction.member_id == member_id)
+    if type:
+        stmt = stmt.where(MemberTransaction.type == type)
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    rows = db.scalars(
+        stmt.order_by(MemberTransaction.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    # 补充会员手机号与姓名，便于后台列表展示
+    member_ids = {r.member_id for r in rows}
+    members = {
+        m.id: m
+        for m in db.scalars(select(Member).where(Member.id.in_(member_ids))).all()
+    }
+    items = []
+    for row in rows:
+        item = MemberTransactionOut.model_validate(row).model_dump()
+        member = members.get(row.member_id)
+        item["mobile"] = member.mobile if member else None
+        item["member_name"] = member.name if member else None
+        items.append(item)
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
 @router.get("/{mobile}", response_model=MemberOut)
 def get_member_by_mobile(mobile: str, db: Session = Depends(get_db)):
     """按手机号查询会员（收银端扫会员码/输手机号识别）。"""
@@ -103,8 +211,9 @@ def update_member(member_id: int, data: MemberUpdate, db: Session = Depends(get_
 def recharge_member(member_id: int, data: MemberRecharge, db: Session = Depends(get_db)):
     """会员储值充值：增加余额并写入充值流水。"""
     member = _get_member(db, member_id)
-    # 增加储值余额
-    member.balance = round((member.balance or 0) + data.amount, 2)
+    # 增加储值余额（充值金额 + 赠送金额）
+    credit = round(data.amount + data.gift_amount, 2)
+    member.balance = round((member.balance or 0) + credit, 2)
     # 活动赠送积分（如有）
     if data.bonus_points:
         member.points = (member.points or 0) + data.bonus_points
@@ -112,7 +221,7 @@ def recharge_member(member_id: int, data: MemberRecharge, db: Session = Depends(
         MemberTransaction(
             member_id=member.id,
             type="recharge",
-            amount=data.amount,
+            amount=credit,
             points=data.bonus_points,
             operator_id=data.operator_id,
         )

@@ -81,6 +81,27 @@ check("流水含消费记录", any(t["type"] == "consume" for t in tx["items"]),
 r = client.get("/api/members/00000000000")
 check("不存在会员返回404", r.status_code == 404, r.text)
 
+# 13. 充值赠送金额计入余额
+mobile2 = "138" + str(int(time.time()))[-8:]
+r = client.post("/api/members", json={"mobile": mobile2, "name": "赠金会员"})
+check("第二个会员建档", r.status_code == 201, r.text)
+member2_id = r.json()["id"]
+r = client.post(
+    f"/api/members/{member2_id}/recharge", json={"amount": 50, "gift_amount": 5}
+)
+check("赠金充值余额 55", r.status_code == 200 and r.json()["balance"] == 55, r.text)
+
+# 14. 会员概览统计
+r = client.get("/api/members/stats")
+data = r.json()
+check("统计返回会员总数", r.status_code == 200 and data["total"] >= 2, r.text)
+check("统计返回消费排行", isinstance(data["top"], list) and len(data["top"]) >= 1, r.text)
+check("统计含本月充值", data["recharge_this_month"] >= 55, r.text)
+
+# 15. 全量流水查询（按会员筛选）
+r = client.get("/api/members/transactions/all", params={"member_id": member_id})
+check("全量流水含会员手机号", r.status_code == 200 and r.json()["items"][0]["mobile"] == mobile, r.text)
+
 client.close()
 print(f"\n=== 结果: {PASS} 通过, {FAIL} 失败 ===")
 raise SystemExit(1 if FAIL else 0)
