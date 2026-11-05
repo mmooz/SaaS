@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id, get_tenant_id
 from app.models import Category, Product
 from app.schemas.category_create import CategoryCreate
 from app.schemas.category_out import CategoryOut
@@ -45,21 +46,40 @@ def build_tree(categories: list[Category]) -> list[CategoryOut]:
 
 
 @router.get("/tree", response_model=list[CategoryOut])
-def get_category_tree(db: Session = Depends(get_db)):
-    """获取全部分类的树形结构。"""
-    categories = db.scalars(select(Category).order_by(Category.sort, Category.id)).all()
+def get_category_tree(
+    db: Session = Depends(get_db), store_id: int = Depends(get_store_id)
+):
+    """获取当前门店全部分类的树形结构。"""
+    categories = db.scalars(
+        select(Category)
+        .where(Category.store_id == store_id)
+        .order_by(Category.sort, Category.id)
+    ).all()
     return build_tree(list(categories))
 
 
 @router.post("", response_model=CategoryOut, status_code=201)
-def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
+def create_category(
+    data: CategoryCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """新增分类。"""
-    # 校验上级分类存在
+    # 校验上级分类存在且属于当前门店
     if data.parent_id:
-        parent = db.get(Category, data.parent_id)
+        parent = db.scalar(
+            select(Category).where(
+                Category.id == data.parent_id, Category.store_id == store_id
+            )
+        )
         if not parent:
             raise HTTPException(status_code=404, detail="上级分类不存在")
-    category = Category(**data.model_dump())
+    category = Category(
+        **data.model_dump(exclude={"store_id"}),
+        tenant_id=tenant_id,
+        store_id=store_id,
+    )
     db.add(category)
     db.commit()
     db.refresh(category)
@@ -67,9 +87,16 @@ def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
 
 
 @router.put("/{category_id}", response_model=CategoryOut)
-def update_category(category_id: int, data: CategoryUpdate, db: Session = Depends(get_db)):
+def update_category(
+    category_id: int,
+    data: CategoryUpdate,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """更新分类（仅更新传入字段）。"""
-    category = db.get(Category, category_id)
+    category = db.scalar(
+        select(Category).where(Category.id == category_id, Category.store_id == store_id)
+    )
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     for key, value in data.model_dump(exclude_unset=True).items():
@@ -80,15 +107,29 @@ def update_category(category_id: int, data: CategoryUpdate, db: Session = Depend
 
 
 @router.delete("/{category_id}")
-def delete_category(category_id: int, db: Session = Depends(get_db)):
+def delete_category(
+    category_id: int,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """删除分类（存在子分类或商品时禁止删除）。"""
-    category = db.get(Category, category_id)
+    category = db.scalar(
+        select(Category).where(Category.id == category_id, Category.store_id == store_id)
+    )
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
-    child_count = db.scalar(select(Category.id).where(Category.parent_id == category_id))
+    child_count = db.scalar(
+        select(Category.id).where(
+            Category.parent_id == category_id, Category.store_id == store_id
+        )
+    )
     if child_count:
         raise HTTPException(status_code=409, detail="该分类存在子分类，请先处理子分类")
-    product_count = db.scalar(select(Product.id).where(Product.category_id == category_id))
+    product_count = db.scalar(
+        select(Product.id).where(
+            Product.category_id == category_id, Product.store_id == store_id
+        )
+    )
     if product_count:
         raise HTTPException(status_code=409, detail="该分类下存在商品，无法删除")
     db.delete(category)

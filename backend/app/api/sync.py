@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id
 from app.models import Category, Product
 from app.schemas.category_out import CategoryOut
 from app.schemas.product_out import ProductOut
@@ -18,8 +19,8 @@ router = APIRouter(prefix="/api/sync", tags=["数据同步"])
 @router.get("/products", response_model=dict)
 def sync_products(
     after: datetime | None = None,
-    store_id: int = 1,
     db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
 ):
     """增量拉取商品与分类：返回 after 时间之后变更的数据，用于收银端本地缓存更新。
 

@@ -6,6 +6,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies import get_store_id, get_tenant_id
 from app.models import Product, ProductPriceHistory
 from app.schemas.batch_price_request import BatchPriceRequest
 from app.schemas.import_result import ImportResult
@@ -37,9 +38,13 @@ def apply_filters(stmt, query: ProductQuery):
 
 
 @router.get("", response_model=dict)
-def list_products(query: ProductQuery = Depends(), db: Session = Depends(get_db)):
+def list_products(
+    query: ProductQuery = Depends(),
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """分页查询商品列表（支持关键字/分类/计价方式筛选）。"""
-    base = apply_filters(select(Product), query)
+    base = apply_filters(select(Product).where(Product.store_id == store_id), query)
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     stmt = (
         base.order_by(Product.category_id, Product.id)
@@ -66,9 +71,11 @@ def download_import_template():
 
 
 @router.get("/export")
-def export_products(db: Session = Depends(get_db)):
-    """导出全部商品为 Excel 文件。"""
-    buffer = excel_service.export_products(db)
+def export_products(
+    db: Session = Depends(get_db), store_id: int = Depends(get_store_id)
+):
+    """导出当前门店全部商品为 Excel 文件。"""
+    buffer = excel_service.export_products(db, store_id)
     return Response(
         content=buffer.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -77,10 +84,15 @@ def export_products(db: Session = Depends(get_db)):
 
 
 @router.post("/batch-price", response_model=dict)
-def batch_adjust_price(data: BatchPriceRequest, db: Session = Depends(get_db)):
+def batch_adjust_price(
+    data: BatchPriceRequest,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """批量改价：按分类/商品范围 + 比例/固定值调整，并记录价格历史。"""
-    # 确定改价范围
-    stmt = select(Product)
+    # 确定改价范围（限定当前门店）
+    stmt = select(Product).where(Product.store_id == store_id)
     if data.mode == "category":
         if data.category_id is None:
             raise HTTPException(status_code=422, detail="按分类改价需提供分类 ID")
@@ -105,6 +117,7 @@ def batch_adjust_price(data: BatchPriceRequest, db: Session = Depends(get_db)):
         if new_price != product.price:
             db.add(
                 ProductPriceHistory(
+                    tenant_id=tenant_id,
                     product_id=product.id,
                     old_price=product.price,
                     new_price=new_price,
@@ -113,55 +126,95 @@ def batch_adjust_price(data: BatchPriceRequest, db: Session = Depends(get_db)):
             product.price = new_price
 
     db.commit()
-    OperationLogService.record(db, "批量改价", f"调整 {len(products)} 个商品价格")
+    OperationLogService.record(
+        db, "批量改价", f"调整 {len(products)} 个商品价格", tenant_id=tenant_id
+    )
     db.commit()
     return {"message": f"已调整 {len(products)} 个商品的价格"}
 
 
 @router.post("/import", response_model=ImportResult)
-async def import_products(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_products(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """上传 Excel 批量导入/更新商品。"""
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=422, detail="请上传 .xlsx 格式的 Excel 文件")
     content = await file.read()
-    result = excel_service.import_products(db, content)
+    result = excel_service.import_products(db, content, tenant_id, store_id)
     return result
 
 
 @router.post("", response_model=ProductOut, status_code=201)
-def create_product(data: ProductCreate, db: Session = Depends(get_db)):
-    """新增商品（条码唯一）。"""
-    exists = db.scalar(select(Product).where(Product.barcode == data.barcode))
+def create_product(
+    data: ProductCreate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
+    """新增商品（同门店条码唯一）。"""
+    exists = db.scalar(
+        select(Product).where(
+            Product.barcode == data.barcode, Product.store_id == store_id
+        )
+    )
     if exists:
         raise HTTPException(status_code=409, detail="条码已存在")
-    product = Product(**data.model_dump())
+    product = Product(
+        **data.model_dump(exclude={"store_id"}),
+        tenant_id=tenant_id,
+        store_id=store_id,
+    )
     db.add(product)
     db.flush()
-    OperationLogService.record(db, "新增商品", f"新增商品 {product.name}（{product.barcode}）")
+    OperationLogService.record(
+        db, "新增商品", f"新增商品 {product.name}（{product.barcode}）", tenant_id=tenant_id
+    )
     db.commit()
     db.refresh(product)
     return product
 
 
 @router.get("/{product_id}", response_model=ProductOut)
-def get_product(product_id: int, db: Session = Depends(get_db)):
+def get_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
     """获取商品详情。"""
-    product = db.get(Product, product_id)
+    product = db.scalar(
+        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+    )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
     return product
 
 
 @router.put("/{product_id}", response_model=ProductOut)
-def update_product(product_id: int, data: ProductUpdate, db: Session = Depends(get_db)):
+def update_product(
+    product_id: int,
+    data: ProductUpdate,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """更新商品（仅更新传入字段）。"""
-    product = db.get(Product, product_id)
+    product = db.scalar(
+        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+    )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
-    # 条码唯一性校验
+    # 条码唯一性校验（同门店范围内）
     if data.barcode:
         dup = db.scalar(
-            select(Product).where(Product.barcode == data.barcode, Product.id != product_id)
+            select(Product).where(
+                Product.barcode == data.barcode,
+                Product.id != product_id,
+                Product.store_id == store_id,
+            )
         )
         if dup:
             raise HTTPException(status_code=409, detail="条码已被其他商品使用")
@@ -172,7 +225,10 @@ def update_product(product_id: int, data: ProductUpdate, db: Session = Depends(g
     if product.price != old_price:
         db.add(
             ProductPriceHistory(
-                product_id=product.id, old_price=old_price, new_price=product.price
+                tenant_id=tenant_id,
+                product_id=product.id,
+                old_price=old_price,
+                new_price=product.price,
             )
         )
     db.commit()
@@ -181,15 +237,24 @@ def update_product(product_id: int, data: ProductUpdate, db: Session = Depends(g
 
 
 @router.delete("/{product_id}")
-def delete_product(product_id: int, db: Session = Depends(get_db)):
+def delete_product(
+    product_id: int,
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+):
     """删除商品。"""
-    product = db.get(Product, product_id)
+    product = db.scalar(
+        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+    )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
     # 先取出名称/条码，删除提交后对象将失效
     name, barcode = product.name, product.barcode
     db.delete(product)
     db.commit()
-    OperationLogService.record(db, "删除商品", f"删除商品 {name}（{barcode}）")
+    OperationLogService.record(
+        db, "删除商品", f"删除商品 {name}（{barcode}）", tenant_id=tenant_id
+    )
     db.commit()
     return {"message": "删除成功"}

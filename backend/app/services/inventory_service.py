@@ -33,6 +33,7 @@ class InventoryService:
         ref_id: int | None = None,
         operator_id: int | None = None,
         apply_stock: bool = True,
+        tenant_id: int | None = None,
     ) -> InventoryMovement:
         """写入一条库存流水并按需同步商品库存。
 
@@ -43,18 +44,22 @@ class InventoryService:
         :param ref_id: 来源单据 ID
         :param operator_id: 操作人 ID
         :param apply_stock: 是否同时更新商品库存（盘点时由调用方直接赋值）
+        :param tenant_id: 所属租户 ID（多租户隔离用）
         :return: 库存流水对象
         """
+        if tenant_id is None:
+            raise ValueError("库存流水必须指定 tenant_id")
         # 称重商品记重量，按件商品记件数
         is_weighed = product.pricing_mode == "weigh"
         movement = InventoryMovement(
+            tenant_id=tenant_id,
             product_id=product.id,
             type=movement_type,
             qty=0 if is_weighed else round(delta, 3),
             weight_kg=round(delta, 3) if is_weighed else None,
             ref_id=ref_id,
             operator_id=operator_id,
-            store_id=product.store_id or 1,
+            store_id=product.store_id,
             synced=True,
         )
         if apply_stock:
@@ -82,7 +87,13 @@ class InventoryService:
                 continue
             delta = -(item.weight_kg or 0) if item.is_weighted else -item.qty
             InventoryService.record(
-                db, product, "sale", delta, ref_id=order.id, operator_id=order.cashier_id
+                db,
+                product,
+                "sale",
+                delta,
+                ref_id=order.id,
+                operator_id=order.cashier_id,
+                tenant_id=order.tenant_id,
             )
 
     @staticmethod
@@ -107,5 +118,11 @@ class InventoryService:
             # 退货量为正，库存加回
             delta = (item.weight_kg or 0) if item.is_weighted else item.qty
             InventoryService.record(
-                db, product, "refund", delta, ref_id=order.id, operator_id=order.cashier_id
+                db,
+                product,
+                "refund",
+                delta,
+                ref_id=order.id,
+                operator_id=order.cashier_id,
+                tenant_id=order.tenant_id,
             )

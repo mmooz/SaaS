@@ -60,8 +60,17 @@ class ExcelService:
         buffer.seek(0)
         return buffer
 
-    def import_products(self, db: Session, file_bytes: bytes) -> ImportResult:
-        """解析 Excel 并批量导入/更新商品，返回导入结果。"""
+    def import_products(
+        self, db: Session, file_bytes: bytes, tenant_id: int, store_id: int
+    ) -> ImportResult:
+        """解析 Excel 并批量导入/更新商品，返回导入结果。
+
+        :param db: 数据库会话
+        :param file_bytes: Excel 文件字节流
+        :param tenant_id: 所属租户 ID
+        :param store_id: 所属门店 ID
+        :return: 导入结果
+        """
         result = ImportResult()
         wb = load_workbook(BytesIO(file_bytes))
         ws = wb.active
@@ -86,7 +95,9 @@ class ExcelService:
                 # 空行跳过
                 if not values or all(v is None or str(v).strip() == "" for v in values):
                     continue
-                product = self._parse_row(db, row_idx, values, category_cache, barcode_cache)
+                product = self._parse_row(
+                    db, row_idx, values, category_cache, barcode_cache, tenant_id, store_id
+                )
                 result.success += 1
                 if product.id:
                     result.updated += 1
@@ -106,8 +117,20 @@ class ExcelService:
         values: list,
         category_cache: dict[str, Category],
         barcode_cache: dict[str, Product],
+        tenant_id: int,
+        store_id: int,
     ) -> Product:
-        """解析单行数据并按条码 upsert 商品。"""
+        """解析单行数据并按条码 upsert 商品。
+
+        :param db: 数据库会话
+        :param row_idx: 行号
+        :param values: 单元格值列表
+        :param category_cache: 分类缓存
+        :param barcode_cache: 条码缓存
+        :param tenant_id: 所属租户 ID
+        :param store_id: 所属门店 ID
+        :return: 商品 ORM 对象
+        """
         (barcode, name, pinyin, category_name, pricing_mode, unit,
          price, member_price, cost_price, shelf_life, stock, safety_stock, enabled) = (
             (values + [None] * len(COLUMNS))[: len(COLUMNS)]
@@ -137,12 +160,14 @@ class ExcelService:
         enabled = str(enabled or "是").strip() not in ("否", "false", "0", "停用")
 
         # 分类：按名称查找或自动创建（支持"一级/二级"路径）
-        category_id = self._resolve_category(db, category_name, category_cache)
+        category_id = self._resolve_category(db, category_name, category_cache, tenant_id, store_id)
 
-        # 按条码查找已有商品（使用缓存避免重复查询）
+        # 按条码查找已有商品（限定当前门店，使用缓存避免重复查询）
         product = barcode_cache.get(barcode)
         if product is None:
-            product = db.scalar(select(Product).where(Product.barcode == barcode))
+            product = db.scalar(
+                select(Product).where(Product.barcode == barcode, Product.store_id == store_id)
+            )
 
         if product:
             # 更新已有商品
@@ -161,6 +186,8 @@ class ExcelService:
         else:
             # 新建商品
             product = Product(
+                tenant_id=tenant_id,
+                store_id=store_id,
                 barcode=barcode,
                 name=name,
                 pinyin=pinyin or None,
@@ -180,8 +207,13 @@ class ExcelService:
         barcode_cache[barcode] = product
         return product
 
-    def export_products(self, db: Session) -> BytesIO:
-        """导出全部商品为 Excel，返回字节流。"""
+    def export_products(self, db: Session, store_id: int) -> BytesIO:
+        """导出指定门店全部商品为 Excel，返回字节流。
+
+        :param db: 数据库会话
+        :param store_id: 门店 ID
+        :return: Excel 字节流
+        """
         wb = Workbook()
         ws = wb.active
         ws.title = "商品列表"
@@ -191,7 +223,9 @@ class ExcelService:
             cell.fill = self.HEADER_FILL
 
         products = db.scalars(
-            select(Product).order_by(Product.category_id, Product.id)
+            select(Product)
+            .where(Product.store_id == store_id)
+            .order_by(Product.category_id, Product.id)
         ).all()
         for p in products:
             ws.append(
@@ -242,9 +276,21 @@ class ExcelService:
 
     @staticmethod
     def _resolve_category(
-        db: Session, category_name: str | None, category_cache: dict[str, Category]
+        db: Session,
+        category_name: str | None,
+        category_cache: dict[str, Category],
+        tenant_id: int,
+        store_id: int,
     ) -> int | None:
-        """按名称解析分类（支持 一级/二级 路径），不存在则自动创建。"""
+        """按名称解析分类（支持 一级/二级 路径），不存在则自动创建（限定当前门店）。
+
+        :param db: 数据库会话
+        :param category_name: 分类名称路径
+        :param category_cache: 分类缓存
+        :param tenant_id: 所属租户 ID
+        :param store_id: 所属门店 ID
+        :return: 分类 ID
+        """
         if not category_name:
             return None
         name = str(category_name).strip()
@@ -261,10 +307,16 @@ class ExcelService:
                 parent_id = category_cache[key].id
                 continue
             category = db.scalar(
-                select(Category).where(Category.name == part, Category.parent_id == parent_id)
+                select(Category).where(
+                    Category.name == part,
+                    Category.parent_id == parent_id,
+                    Category.store_id == store_id,
+                )
             )
             if category is None:
-                category = Category(name=part, parent_id=parent_id)
+                category = Category(
+                    name=part, parent_id=parent_id, tenant_id=tenant_id, store_id=store_id
+                )
                 db.add(category)
                 db.flush()  # 获取自增 ID
             category_cache[key] = category

@@ -55,7 +55,7 @@ class RefundService:
 
     @staticmethod
     def _refund_stored_value(
-        db: Session, order: Order, amount: float, data: RefundCreate
+        db: Session, order: Order, amount: float, data: RefundCreate, tenant_id: int
     ) -> None:
         """储值支付订单退款：把金额退回会员余额并写入资金流水。
 
@@ -63,6 +63,7 @@ class RefundService:
         :param order: 原订单
         :param amount: 退款金额
         :param data: 退款请求
+        :param tenant_id: 所属租户 ID
         """
         if not order.member_id or amount <= 0:
             return
@@ -79,6 +80,7 @@ class RefundService:
         member.balance = round((member.balance or 0) + amount, 2)
         db.add(
             MemberTransaction(
+                tenant_id=tenant_id,
                 member_id=member.id,
                 type="refund",
                 amount=amount,
@@ -88,12 +90,13 @@ class RefundService:
         )
 
     @staticmethod
-    def refund(db: Session, order: Order, data: RefundCreate) -> RefundRecord:
+    def refund(db: Session, order: Order, data: RefundCreate, tenant_id: int) -> RefundRecord:
         """执行退款：校验可退范围、生成退款单、回滚库存并返还储值。
 
         :param db: 数据库会话
         :param order: 原订单 ORM 对象
         :param data: 退款请求
+        :param tenant_id: 所属租户 ID
         :return: 新建的退款单
         :raises ValueError: 订单状态或退货明细不满足退款条件
         """
@@ -129,6 +132,7 @@ class RefundService:
             order.status = "partially_refunded"
 
         record_kwargs = {
+            "tenant_id": tenant_id,
             "refund_no": data.refund_no or RefundService._build_refund_no(),
             "order_id": order.id,
             "order_no": order.order_no,
@@ -145,6 +149,7 @@ class RefundService:
         for item in items:
             record.items.append(
                 RefundItem(
+                    tenant_id=tenant_id,
                     order_item_id=item.id,
                     name=item.name,
                     qty=item.qty,
@@ -157,7 +162,7 @@ class RefundService:
         db.add(record)
         # 库存回滚与储值返还
         InventoryService.restore_for_refund(db, order, items)
-        RefundService._refund_stored_value(db, order, amount, data)
+        RefundService._refund_stored_value(db, order, amount, data, tenant_id)
         db.flush()
         return record
 
