@@ -65,10 +65,40 @@
         <!-- ===== 打印机 ===== -->
         <template v-else-if="activeMenu === 'printer'">
           <div class="panel-title">打印机</div>
+          <!-- 打印通道与系统打印机列表 -->
+          <div class="printer-block">
+            <div class="printer-title">打印方式（原生直连）</div>
+            <el-form label-width="90px" class="set-form">
+              <el-form-item label="打印通道">
+                <el-select v-model="printMode" size="large" class="set-input">
+                  <el-option label="自动（优先原生直连）" value="auto" />
+                  <el-option label="仅浏览器打印（HTML）" value="html" />
+                </el-select>
+                <span class="field-tip">{{ nativeTip }}</span>
+              </el-form-item>
+              <el-form-item label="系统打印机">
+                <el-button class="big-btn" :loading="loadingPrinters" @click="loadSystemPrinters">
+                  <el-icon><Refresh /></el-icon>&nbsp;刷新打印机列表
+                </el-button>
+              </el-form-item>
+            </el-form>
+          </div>
           <!-- 标签打印机 -->
           <div class="printer-block">
             <div class="printer-title">标签打印机（价格标签）</div>
             <el-form label-width="90px" class="set-form">
+              <el-form-item label="系统打印机">
+                <el-select
+                  v-model="labelPrinter.systemName"
+                  size="large"
+                  class="set-input"
+                  clearable
+                  filterable
+                  placeholder="未选择（使用浏览器打印）"
+                >
+                  <el-option v-for="p in systemPrinters" :key="p" :label="p" :value="p" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="型号">
                 <el-input v-model="labelPrinter.model" size="large" class="set-input" />
               </el-form-item>
@@ -96,6 +126,18 @@
           <div class="printer-block">
             <div class="printer-title">小票打印机（收银小票）</div>
             <el-form label-width="90px" class="set-form">
+              <el-form-item label="系统打印机">
+                <el-select
+                  v-model="receiptPrinter.systemName"
+                  size="large"
+                  class="set-input"
+                  clearable
+                  filterable
+                  placeholder="未选择（使用浏览器打印）"
+                >
+                  <el-option v-for="p in systemPrinters" :key="p" :label="p" :value="p" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="型号">
                 <el-input v-model="receiptPrinter.model" size="large" class="set-input" />
               </el-form-item>
@@ -196,6 +238,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Check, Odometer, Printer, Refresh, Shop } from '@element-plus/icons-vue'
 import { PrintService } from '../services/print/PrintService'
+import { TauriPrintService } from '../services/print/TauriPrintService'
 
 /** 设置项在 localStorage 中的键名 */
 const SETTINGS_KEY = 'pos_settings'
@@ -220,9 +263,18 @@ const scaleForm = reactive({
 const comPorts = ['COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8']
 const baudRates = [9600, 4800]
 
-// 打印机配置（随保存写入本地设置）
-const labelPrinter = reactive({ model: '佳博 GP-1224T', port: 'USB', paperWidth: '60mm' })
-const receiptPrinter = reactive({ model: '佳博 XP-58III', port: 'USB', paperWidth: '58mm' })
+// 打印机配置（随保存写入本地设置；systemName 为系统打印队列名称，空值表示未选择）
+const labelPrinter = reactive({ systemName: '', model: '佳博 GP-1224T', port: 'USB', paperWidth: '60mm' })
+const receiptPrinter = reactive({ systemName: '', model: '佳博 XP-58III', port: 'USB', paperWidth: '58mm' })
+
+// 打印通道：auto=原生直连优先，html=仅浏览器打印
+const printMode = ref('auto')
+// 本机系统打印机名称列表
+const systemPrinters = ref([])
+// 系统打印机列表加载状态
+const loadingPrinters = ref(false)
+// 原生打印环境提示文案
+const nativeTip = ref('')
 
 // 门店信息（默认值取自打印服务，保存后与打印模板保持一致）
 const storeForm = reactive({
@@ -242,12 +294,33 @@ const syncLogs = ref([
   { time: '2026-11-04 20:00', content: '同步收银班次数据', ok: false },
 ])
 
-// 保存设置：写入 localStorage，并同步门店打印信息
+/**
+ * 加载本机系统打印机列表（浏览器环境返回空列表）
+ * @returns {Promise<void>}
+ */
+const loadSystemPrinters = async () => {
+  loadingPrinters.value = true
+  try {
+    systemPrinters.value = await TauriPrintService.listPrinters()
+    if (!TauriPrintService.isAvailable()) {
+      nativeTip.value = '当前为浏览器环境，原生直连保存后在桌面客户端生效'
+    } else if (!systemPrinters.value.length) {
+      nativeTip.value = '未检测到系统打印机，请检查打印机连接与驱动'
+    } else {
+      nativeTip.value = `已检测到 ${systemPrinters.value.length} 台系统打印机`
+    }
+  } finally {
+    loadingPrinters.value = false
+  }
+}
+
+// 保存设置：写入 localStorage，并同步门店打印信息与系统打印机选择
 const saveSettings = () => {
   const settings = {
     scale: { ...scaleForm },
     labelPrinter: { ...labelPrinter },
     receiptPrinter: { ...receiptPrinter },
+    printMode: printMode.value,
     store: { ...storeForm },
   }
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
@@ -258,20 +331,24 @@ const saveSettings = () => {
     receiptHeader: storeForm.receiptHeader,
     slogan: storeForm.slogan,
     paperWidth: parseInt(receiptPrinter.paperWidth, 10) || 58,
+    printMode: printMode.value,
+    receiptPrinterName: receiptPrinter.systemName || '',
+    labelPrinterName: labelPrinter.systemName || '',
   })
   ElMessage.success('设置已保存')
 }
 
 // 测试打印：按打印机类型生成样例并送入打印通道
-const testPrint = (name) => {
+const testPrint = async (name) => {
   const orderNo = `TEST${Date.now()}`
+  let channel = 'html'
   if (name === '标签打印机') {
-    PrintService.printLabel(
+    channel = await PrintService.printLabel(
       { orderNo },
       { productId: 1, name: '测试商品', weight: 0.52, price: 9.8, amount: 5.1 },
     )
   } else {
-    PrintService.printReceipt({
+    channel = await PrintService.printReceipt({
       orderNo,
       cashierName: '测试收银员',
       totalAmount: 12.8,
@@ -285,7 +362,8 @@ const testPrint = (name) => {
       ],
     })
   }
-  ElMessage.success(`测试打印已发送：${name}`)
+  const channelText = channel === 'native' ? '原生直连' : '浏览器打印'
+  ElMessage.success(`测试打印已发送：${name}（${channelText}）`)
 }
 
 // 立即同步：更新同步状态并追加日志（演示）
@@ -310,15 +388,23 @@ onMounted(() => {
 
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
-    if (!raw) return
-    const data = JSON.parse(raw)
-    if (data.scale) Object.assign(scaleForm, data.scale)
-    if (data.labelPrinter) Object.assign(labelPrinter, data.labelPrinter)
-    if (data.receiptPrinter) Object.assign(receiptPrinter, data.receiptPrinter)
-    if (data.store) Object.assign(storeForm, data.store)
+    const data = raw ? JSON.parse(raw) : null
+    if (data) {
+      if (data.scale) Object.assign(scaleForm, data.scale)
+      if (data.labelPrinter) Object.assign(labelPrinter, data.labelPrinter)
+      if (data.receiptPrinter) Object.assign(receiptPrinter, data.receiptPrinter)
+      if (data.store) Object.assign(storeForm, data.store)
+      if (data.printMode) printMode.value = data.printMode
+    }
   } catch {
     ElMessage.warning('本地设置已损坏，已恢复默认值')
   }
+
+  // 打印通道与打印机名称以打印服务已保存的配置为准
+  printMode.value = PrintService.storeInfo.printMode || printMode.value
+  labelPrinter.systemName = PrintService.storeInfo.labelPrinterName || labelPrinter.systemName
+  receiptPrinter.systemName = PrintService.storeInfo.receiptPrinterName || receiptPrinter.systemName
+  loadSystemPrinters()
 })
 </script>
 
