@@ -1,6 +1,44 @@
 // 后台管理 API 封装：统一请求后端 FastAPI 服务
 
 const BASE_URL = 'http://127.0.0.1:8000'
+// 后台登录令牌缓存键
+const TOKEN_KEY = 'admin_token'
+
+/**
+ * 保存后台登录令牌
+ * @param {string} token 访问令牌
+ */
+export function setAdminToken(token) {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+/**
+ * 读取后台登录令牌
+ * @returns {string} 令牌（不存在时为空串）
+ */
+export function getAdminToken() {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+/**
+ * 清除后台登录令牌
+ */
+export function clearAdminToken() {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
+/**
+ * 后台登录
+ * @param {string} username 用户名
+ * @param {string} password 密码
+ * @returns {Promise<object>} { access_token, user }
+ */
+export function login(username, password) {
+  return request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+}
 
 /**
  * 发起 JSON 请求并解析响应
@@ -9,15 +47,42 @@ const BASE_URL = 'http://127.0.0.1:8000'
  * @returns {Promise<any>} 解析后的数据
  */
 async function request(path, options = {}) {
+  const token = getAdminToken()
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.detail || `请求失败(${res.status})`)
   }
   if (res.status === 204) return null
+  return res.json()
+}
+
+/**
+ * 以表单方式上传文件（Excel 导入用）
+ * @param {string} path 接口路径
+ * @param {File} file 上传文件
+ * @returns {Promise<any>} 解析后的数据
+ */
+async function upload(path, file) {
+  const token = getAdminToken()
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.detail || `上传失败(${res.status})`)
+  }
   return res.json()
 }
 
@@ -233,19 +298,152 @@ export function fetchInventoryMovements(params = {}) {
 /* ---------------- 商品 / 分类（下拉选项） ---------------- */
 
 /**
- * 查询商品列表（下拉选项用）
+ * 分页查询商品
+ * @param {object} params { keyword, categoryId, pricingMode, enabled, page, pageSize }
  * @returns {Promise<object>} 商品分页数据
  */
-export function fetchProducts() {
-  return request('/api/products?page_size=200')
+export function fetchProducts(params = {}) {
+  return request(
+    `/api/products${query({
+      keyword: params.keyword,
+      category_id: params.categoryId,
+      pricing_mode: params.pricingMode,
+      enabled: params.enabled,
+      page: params.page,
+      page_size: params.pageSize || 200,
+    })}`,
+  )
 }
 
 /**
- * 查询分类树（下拉选项用）
+ * 新增商品
+ * @param {object} data 商品数据（后端字段命名）
+ * @returns {Promise<object>} 商品信息
+ */
+export function createProduct(data) {
+  return request('/api/products', { method: 'POST', body: JSON.stringify(data) })
+}
+
+/**
+ * 更新商品
+ * @param {number} id 商品 ID
+ * @param {object} data 商品数据（后端字段命名）
+ * @returns {Promise<object>} 商品信息
+ */
+export function updateProduct(id, data) {
+  return request(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+}
+
+/**
+ * 删除商品
+ * @param {number} id 商品 ID
+ * @returns {Promise<void>}
+ */
+export function deleteProduct(id) {
+  return request(`/api/products/${id}`, { method: 'DELETE' })
+}
+
+/**
+ * 批量改价
+ * @param {object} data { mode, categoryId, productIds, adjustType, value }
+ * @returns {Promise<object>} 调整结果
+ */
+export function batchAdjustPrice(data) {
+  return request('/api/products/batch-price', {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: data.mode,
+      category_id: data.categoryId ?? null,
+      product_ids: data.productIds || [],
+      adjust_type: data.adjustType,
+      value: data.value,
+    }),
+  })
+}
+
+/**
+ * Excel 导入商品
+ * @param {File} file xlsx 文件
+ * @returns {Promise<object>} 导入结果
+ */
+export function importProducts(file) {
+  return upload('/api/products/import', file)
+}
+
+/**
+ * 商品导出地址（浏览器直接下载）
+ * @returns {string} 导出接口地址
+ */
+export function productExportUrl() {
+  return `${BASE_URL}/api/products/export`
+}
+
+/**
+ * 商品导入模板下载地址
+ * @returns {string} 模板接口地址
+ */
+export function productTemplateUrl() {
+  return `${BASE_URL}/api/products/import-template`
+}
+
+/**
+ * 查询分类树
+ * @returns {Promise<Array<object>>} 分类树
+ */
+export function fetchCategoryTree() {
+  return request('/api/categories/tree')
+}
+
+/**
+ * 查询分类树（兼容旧调用名）
  * @returns {Promise<Array<object>>} 分类树
  */
 export function fetchCategories() {
-  return request('/api/categories/tree')
+  return fetchCategoryTree()
+}
+
+/**
+ * 新增分类
+ * @param {object} data { name, parentId, sort, enabled }
+ * @returns {Promise<object>} 分类信息
+ */
+export function createCategory(data) {
+  return request('/api/categories', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: data.name,
+      parent_id: data.parentId ?? null,
+      sort: data.sort ?? 0,
+      enabled: data.enabled ?? true,
+    }),
+  })
+}
+
+/**
+ * 更新分类
+ * @param {number} id 分类 ID
+ * @param {object} data { name, parentId, sort, enabled }
+ * @returns {Promise<object>} 分类信息
+ */
+export function updateCategory(id, data) {
+  return request(`/api/categories/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: data.name,
+      parent_id: data.parentId ?? null,
+      sort: data.sort ?? 0,
+      enabled: data.enabled ?? true,
+    }),
+  })
+}
+
+/**
+ * 删除分类
+ * @param {number} id 分类 ID
+ * @returns {Promise<void>}
+ */
+export function deleteCategory(id) {
+  return request(`/api/categories/${id}`, { method: 'DELETE' })
 }
 
 /* ---------------- 订单 ---------------- */

@@ -30,15 +30,10 @@
               <template #prefix><el-icon><Lock /></el-icon></template>
             </el-input>
           </el-form-item>
-          <el-button type="primary" class="login-btn" @click="handleLogin">
+          <el-button type="primary" class="login-btn" :loading="loading" @click="handleLogin">
             登 录
           </el-button>
         </el-form>
-        <div class="quick-roles">
-          <span class="qr-label">快捷体验：</span>
-          <el-tag class="qr-tag" @click="quickLogin('店长')">店长</el-tag>
-          <el-tag class="qr-tag" type="info" @click="quickLogin('管理员')">管理员</el-tag>
-        </div>
       </div>
       <div class="login-footer">© 2026 鲜衡云 · 电子秤收银系统</div>
     </div>
@@ -46,32 +41,48 @@
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { login, setAdminToken } from '../api'
 
 const router = useRouter()
 
-// 登录表单数据（页面设计阶段为模拟值）
+// 登录中状态（防止重复提交）
+const loading = ref(false)
+
+// 登录表单数据
 const form = reactive({
   username: '',
   password: '',
 })
 
-// 登录：校验后跳转仪表盘
-const handleLogin = () => {
-  if (!form.username) {
-    ElMessage.warning('请输入用户名')
+/**
+ * 登录：调用后端认证接口，校验角色后保存令牌并跳转仪表盘
+ * @returns {Promise<void>}
+ */
+const handleLogin = async () => {
+  if (!form.username || !form.password) {
+    ElMessage.warning('请输入用户名与密码')
     return
   }
-  router.push('/dashboard')
-}
-
-// 快捷登录：以对应角色进入后台
-const quickLogin = (role) => {
-  ElMessage.success(`以「${role}」身份进入演示环境`)
-  router.push('/dashboard')
+  loading.value = true
+  try {
+    const res = await login(form.username, form.password)
+    // 仅店长/管理员可进入后台
+    if (!['admin', 'manager'].includes(res.user.role)) {
+      ElMessage.warning('该账号无后台管理权限')
+      return
+    }
+    setAdminToken(res.access_token)
+    ElMessage.success(`欢迎回来，${res.user.name}`)
+    router.push('/dashboard')
+  } catch (err) {
+    ElMessage.error(`登录失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
@@ -175,20 +186,6 @@ const quickLogin = (role) => {
   letter-spacing: 4px;
   border-radius: var(--radius-md);
   font-weight: 600;
-}
-.quick-roles {
-  margin-top: 20px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  justify-content: center;
-}
-.qr-label {
-  font-size: 12px;
-  color: var(--neutral-400);
-}
-.qr-tag {
-  cursor: pointer;
 }
 .login-footer {
   position: absolute;
