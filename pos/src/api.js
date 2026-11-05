@@ -106,12 +106,37 @@ export function fetchHealth() {
  * @param {number} [params.pageSize] 每页条数
  * @returns {Promise<{total:number,page:number,page_size:number,items:Array}>}
  */
-export function fetchOrders({ start, end, status, page = 1, pageSize = 20 } = {}) {
+export function fetchOrders({ start, end, status, keyword, page = 1, pageSize = 20 } = {}) {
   const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
   if (start) query.set('start', start)
   if (end) query.set('end', end)
   if (status) query.set('status', status)
+  if (keyword) query.set('keyword', keyword)
   return request(`/api/orders?${query.toString()}`)
+}
+
+/**
+ * 订单退款 / 单项退货
+ * @param {string} orderNo 订单号
+ * @param {object} data 退款数据
+ * @param {string} data.refundType full=整单退款 item=单项退货
+ * @param {number[]} [data.itemIds] 退货明细主键（单项退货必填）
+ * @param {string} [data.reason] 退款原因
+ * @param {number} [data.cashierId] 操作收银员 ID
+ * @param {number} [data.authorizerId] 店长授权人 ID
+ * @returns {Promise<object>} 退款单
+ */
+export function refundOrder(orderNo, data) {
+  return request(`/api/orders/${encodeURIComponent(orderNo)}/refund`, {
+    method: 'POST',
+    body: JSON.stringify({
+      refund_type: data.refundType,
+      item_ids: data.itemIds || [],
+      reason: data.reason || null,
+      cashier_id: data.cashierId ?? null,
+      authorizer_id: data.authorizerId ?? null,
+    }),
+  })
 }
 
 /**
