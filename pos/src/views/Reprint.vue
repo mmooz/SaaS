@@ -186,20 +186,20 @@ const currentLabelOrder = computed(() =>
 )
 
 // 补打小票：调用打印通道重新出票
-const reprintReceipt = (row) => {
-  PrintService.printReceipt(row.printModel)
+const reprintReceipt = async (row) => {
+  await PrintService.printReceipt(row.printModel)
   ElMessage.success(`已补打小票：${row.orderNo}`)
 }
 
 // 补打单个价格标签
-const reprintLabel = (item) => {
-  PrintService.printLabel(currentLabelOrder.value.printModel, item)
+const reprintLabel = async (item) => {
+  await PrintService.printLabel(currentLabelOrder.value.printModel, item)
   ElMessage.success(`已补打标签：${item.name}`)
 }
 
 // 补打全部价格标签
-const reprintLabelAll = () => {
-  const count = PrintService.printLabels(
+const reprintLabelAll = async () => {
+  const count = await PrintService.printLabels(
     currentLabelOrder.value.printModel,
     currentLabelOrder.value.printModel.items,
   )

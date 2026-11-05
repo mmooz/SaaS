@@ -1,10 +1,13 @@
 /**
- * 打印服务：把模板生成的 HTML 送入系统打印通道（隐藏 iframe + window.print）。
- * 浏览器与 Tauri WebView 共用同一实现。
+ * 打印服务：优先走 Tauri 原生直连（ESC/POS 小票、TSPL 标签），
+ * 未配置打印机或原生失败时回退 HTML 模板 + window.print。
  */
 import { ReceiptTemplate } from './ReceiptTemplate.js'
 import { LabelTemplate } from './LabelTemplate.js'
 import { ShiftTemplate } from './ShiftTemplate.js'
+import { TauriPrintService } from './TauriPrintService.js'
+import { LabelCode } from './LabelCode.js'
+import { PrintFormatter as F } from './PrintFormatter.js'
 
 export class PrintService {
   /** 门店打印信息在 localStorage 中的键名 */
@@ -12,7 +15,11 @@ export class PrintService {
 
   /**
    * 打印门店信息（可通过设置页覆盖）
-   * @type {{ storeName: string, storeAddress: string, phone: string, receiptHeader: string, slogan: string, paperWidth: number }}
+   * @type {{
+   *   storeName: string, storeAddress: string, phone: string, receiptHeader: string,
+   *   slogan: string, paperWidth: number, printMode: 'auto'|'html',
+   *   receiptPrinterName: string, labelPrinterName: string
+   * }}
    */
   static storeInfo = {
     storeName: '鲜衡生鲜超市',
@@ -21,7 +28,16 @@ export class PrintService {
     receiptHeader: '',
     slogan: '多谢惠顾，欢迎再次光临！',
     paperWidth: 58,
+    /** 打印通道：auto=原生优先（未配置则 HTML），html=始终 HTML */
+    printMode: 'auto',
+    /** 小票打印机（系统打印机名称） */
+    receiptPrinterName: '',
+    /** 标签打印机（系统打印机名称） */
+    labelPrinterName: '',
   }
+
+  /** 允许被空值覆盖的字段（打印机选择需要支持“未选择”） */
+  static CLEARABLE_FIELDS = ['receiptPrinterName', 'labelPrinterName', 'printMode']
 
   /**
    * 从 localStorage 加载门店打印信息（配置损坏时保留默认值）
@@ -33,9 +49,11 @@ export class PrintService {
       if (!raw) return this.storeInfo
       const data = JSON.parse(raw)
       Object.keys(this.storeInfo).forEach((key) => {
-        if (data[key] !== undefined && data[key] !== null && data[key] !== '') {
-          this.storeInfo[key] = data[key]
-        }
+        const value = data[key]
+        if (value === undefined || value === null) return
+        // 打印机名称等字段允许保存为未选择（空字符串），其余字段空值不覆盖默认值
+        if (value === '' && !this.CLEARABLE_FIELDS.includes(key)) return
+        this.storeInfo[key] = value
       })
     } catch {
       // 配置损坏时忽略，继续使用默认值
@@ -84,38 +102,141 @@ export class PrintService {
   }
 
   /**
-   * 打印小票
-   * @param {object} order 小票数据模型（见 ReceiptTemplate）
-   * @returns {void}
+   * 判断是否走原生直连打印
+   * @param {string} printerName 目标系统打印机名称
+   * @returns {boolean} 已选择打印机、未强制 HTML 且处于 Tauri 环境时为 true
    */
-  static printReceipt(order) {
+  static shouldUseNative(printerName) {
+    if (this.storeInfo.printMode === 'html') return false
+    if (!printerName) return false
+    return TauriPrintService.isAvailable()
+  }
+
+  /**
+   * 组装小票原生打印任务（字段与 Rust ReceiptJob 对应）
+   * @param {object} order 小票数据模型
+   * @returns {object} 原生打印任务
+   */
+  static buildReceiptJob(order) {
+    const info = this.storeInfo
+    const items = (order.items || []).map((item) => {
+      const row = {
+        name: String(item.name ?? ''),
+        weighted: !!item.weighted,
+        price: Number(item.price) || 0,
+        amount: Number(item.amount) || 0,
+      }
+      // 称重商品传重量，按件商品传数量（Rust 侧为可选字段）
+      if (item.weighted) row.weight = Number(item.weight) || 0
+      else row.qty = Number(item.qty) || 0
+      return row
+    })
+
+    return {
+      storeName: info.storeName,
+      storeAddress: info.storeAddress,
+      phone: info.phone,
+      receiptHeader: info.receiptHeader,
+      slogan: info.slogan,
+      paperWidth: Number(info.paperWidth) || 58,
+      orderNo: String(order.orderNo ?? ''),
+      time: order.time || F.datetime(),
+      cashierName: order.cashierName || '',
+      memberMobile: order.memberMobile || '',
+      items,
+      totalAmount: Number(order.totalAmount) || 0,
+      discount: Number(order.discount) || 0,
+      payMethod: order.payMethod || '',
+      cashReceived: order.cashReceived == null ? null : Number(order.cashReceived),
+      change: order.change == null ? null : Number(order.change),
+    }
+  }
+
+  /**
+   * 组装称重标签原生打印任务（字段与 Rust LabelJob 对应）
+   * @param {object} order 订单信息（提供单号）
+   * @param {Array} items 称重商品列表
+   * @returns {object} 原生打印任务
+   */
+  static buildLabelJob(order, items) {
+    return {
+      storeName: this.storeInfo.storeName,
+      printTime: F.datetime(),
+      labels: items.map((item) => ({
+        name: String(item.name ?? ''),
+        weight: Number(item.weight) || 0,
+        price: Number(item.price) || 0,
+        amount: Number(item.amount) || 0,
+        code: LabelCode.build(order.orderNo, item.productId, item.weight),
+      })),
+    }
+  }
+
+  /**
+   * 打印小票：原生直连优先，未配置或失败时回退 HTML
+   * @param {object} order 小票数据模型（见 ReceiptTemplate）
+   * @returns {Promise<'native'|'html'>} 实际使用的打印通道
+   */
+  static async printReceipt(order) {
     this.loadStoreInfo()
+    const printerName = this.storeInfo.receiptPrinterName
+    if (this.shouldUseNative(printerName)) {
+      try {
+        await TauriPrintService.printReceipt(printerName, this.buildReceiptJob(order))
+        return 'native'
+      } catch (err) {
+        console.warn('原生打印小票失败，回退 HTML 打印：', err)
+      }
+    }
     const template = new ReceiptTemplate()
     this.print(template.build(order, this.storeInfo))
+    return 'html'
   }
 
   /**
-   * 打印单张称重标签
+   * 打印单张称重标签：原生直连优先，未配置或失败时回退 HTML
    * @param {object} order 订单信息
    * @param {object} item 称重商品
-   * @returns {void}
+   * @returns {Promise<'native'|'html'>} 实际使用的打印通道
    */
-  static printLabel(order, item) {
+  static async printLabel(order, item) {
     this.loadStoreInfo()
+    const printerName = this.storeInfo.labelPrinterName
+    if (this.shouldUseNative(printerName)) {
+      try {
+        await TauriPrintService.printLabels(printerName, this.buildLabelJob(order, [item]))
+        return 'native'
+      } catch (err) {
+        console.warn('原生打印标签失败，回退 HTML 打印：', err)
+      }
+    }
     const template = new LabelTemplate()
     this.print(template.build(order, item, this.storeInfo))
+    return 'html'
   }
 
   /**
-   * 打印订单内全部称重商品的标签
+   * 打印订单内全部称重商品的标签：原生直连优先，未配置或失败时回退 HTML
    * @param {object} order 订单信息
    * @param {Array} items 称重商品列表，缺省取订单内的称重明细
-   * @returns {number} 实际打印的标签数量
+   * @returns {Promise<number>} 实际打印的标签数量
    */
-  static printLabels(order, items) {
+  static async printLabels(order, items) {
     this.loadStoreInfo()
     const list = (items || order.items || []).filter((i) => i.weighted)
     if (!list.length) return 0
+    const printerName = this.storeInfo.labelPrinterName
+    if (this.shouldUseNative(printerName)) {
+      try {
+        const count = await TauriPrintService.printLabels(
+          printerName,
+          this.buildLabelJob(order, list),
+        )
+        return Number(count) || list.length
+      } catch (err) {
+        console.warn('原生打印标签失败，回退 HTML 打印：', err)
+      }
+    }
     const template = new LabelTemplate()
     this.print(template.buildMany(order, list, this.storeInfo))
     return list.length
