@@ -14,7 +14,7 @@
           <el-input
             v-model="form.username"
             size="large"
-            placeholder="收银员工号 / 姓名"
+            placeholder="登录账号（工号）"
             clearable
             @keyup.enter="doLogin"
           >
@@ -33,51 +33,30 @@
             <template #prefix><el-icon><Lock /></el-icon></template>
           </el-input>
         </el-form-item>
-        <el-button type="primary" class="login-btn" @click="doLogin">登 录</el-button>
+        <el-button type="primary" class="login-btn" :loading="loading" @click="doLogin">登 录</el-button>
       </el-form>
     </div>
 
-    <!-- 收银员快捷选择区：点击头像一键登录 -->
-    <div class="quick-block">
-      <div class="quick-title">快捷登录</div>
-      <div class="quick-list">
-        <button
-          v-for="c in cashiers"
-          :key="c.id"
-          class="cashier-btn"
-          @click="quickLogin(c)"
-        >
-          <span class="avatar">{{ c.avatar }}</span>
-          <span class="cashier-name">{{ c.name }}</span>
-          <span class="cashier-no num">{{ c.no }}</span>
-        </button>
-      </div>
-    </div>
-
     <!-- 底部版本信息 -->
-    <div class="footer">鲜衡 POS v0.1 演示版</div>
+    <div class="footer">鲜衡 POS v0.1</div>
   </div>
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
+import { login } from '../api'
 import { usePosStore } from '../stores/posStore'
 
 const router = useRouter()
 const store = usePosStore()
 
-// 登录表单数据（演示：任意输入均可登录）
+// 登录表单数据
 const form = reactive({ username: '', password: '' })
-
-// 快捷登录收银员列表（模拟数据）
-const cashiers = [
-  { id: 1, no: 'A1001', name: '收银员 小李', avatar: '🍎' },
-  { id: 2, no: 'A1002', name: '收银员 小王', avatar: '🍊' },
-  { id: 3, no: 'A1003', name: '收银员 小张', avatar: '🥬' },
-]
+// 登录请求进行中（防止重复提交）
+const loading = ref(false)
 
 // 登录成功后跳转：优先回到被路由守卫拦截的目标页
 const goAfterLogin = () => {
@@ -85,24 +64,30 @@ const goAfterLogin = () => {
   router.push(typeof target === 'string' && target.startsWith('/') ? target : '/')
 }
 
-// 表单登录：校验工号与密码后进入收银台
-const doLogin = () => {
-  if (!form.username.trim() || !form.password.trim()) {
-    ElMessage.warning('请输入工号与密码')
+// 表单登录：调用后端接口校验账号密码，成功后进入收银台
+const doLogin = async () => {
+  const username = form.username.trim()
+  if (!username || !form.password.trim()) {
+    ElMessage.warning('请输入账号与密码')
     return
   }
-  // 记录当前收银员（演示：用户名即身份，S6 对接真实登录接口）
-  store.setCashier({ id: 1, no: 'A1001', name: form.username, role: 'cashier' })
-  ElMessage.success(`欢迎回来，${form.username}`)
-  goAfterLogin()
-}
-
-// 快捷登录：点击头像一键进入收银台
-const quickLogin = (c) => {
-  // 记录当前收银员，结算时随订单上传
-  store.setCashier({ id: c.id, no: c.no, name: c.name, role: 'cashier' })
-  ElMessage.success(`${c.name} 登录成功`)
-  goAfterLogin()
+  loading.value = true
+  try {
+    const result = await login(username, form.password.trim())
+    // 保存令牌与收银员身份（启动后保持登录，结算时随订单上传工号）
+    store.setAuth(result.access_token, {
+      id: result.user.id,
+      no: result.user.username,
+      name: result.user.name,
+      role: result.user.role,
+    })
+    ElMessage.success(`欢迎回来，${result.user.name}`)
+    goAfterLogin()
+  } catch (err) {
+    ElMessage.error(err.message || '登录失败，请稍后重试')
+  } finally {
+    loading.value = false
+  }
 }
 </script>
 
@@ -171,49 +156,6 @@ const quickLogin = (c) => {
   letter-spacing: 6px;
   border-radius: var(--radius-md);
   margin-top: var(--space-1);
-}
-
-/* ----- 快捷选择区 ----- */
-.quick-block {
-  text-align: center;
-}
-.quick-title {
-  font-size: 16px;
-  color: oklch(85% 0.04 152);
-  margin-bottom: var(--space-3);
-}
-.quick-list {
-  display: flex;
-  gap: var(--space-3);
-}
-.cashier-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  min-width: 100px;
-  padding: var(--space-3) var(--space-2);
-  background: oklch(32% 0.08 152 / 0.9);
-  border: 1px solid oklch(55% 0.12 152 / 0.6);
-  border-radius: var(--radius-lg);
-  color: #fff;
-  cursor: pointer;
-  transition: transform 0.12s, background 0.12s;
-}
-.cashier-btn:hover {
-  transform: translateY(-2px);
-  background: var(--brand);
-}
-.avatar {
-  font-size: 34px;
-}
-.cashier-name {
-  font-size: 15px;
-  font-weight: 600;
-}
-.cashier-no {
-  font-size: 12px;
-  color: oklch(78% 0.04 152);
 }
 
 /* ----- 底部版本 ----- */

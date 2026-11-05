@@ -2,7 +2,7 @@
 
 import { defineStore } from 'pinia'
 import { PromotionEngine } from '../services/PromotionEngine.js'
-import { consumeMember, fetchActivePromotions, fetchSyncData, uploadOrder } from '../api.js'
+import { clearAuthToken, consumeMember, fetchActivePromotions, fetchSyncData, setAuthToken, uploadOrder } from '../api.js'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
@@ -137,6 +137,16 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
+     * 保存登录结果：写入令牌与收银员身份（应用重启后保持登录）
+     * @param {string} token 登录令牌
+     * @param {object} user 收银员信息
+     */
+    setAuth(token, user) {
+      setAuthToken(token)
+      this.setCashier(user)
+    },
+
+    /**
      * 设置当前收银员（同时写入本地缓存，应用重启后保持登录）
      * @param {object} user 收银员信息
      */
@@ -146,13 +156,14 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 退出登录：清空收银员、会员与购物车，避免下一位收银员沿用上一班数据
+     * 退出登录：清空令牌、收银员、会员与购物车，避免下一位收银员沿用上一班数据
      */
     clearCashier() {
       this.cashier = null
       this.member = null
       this.clearCart()
       localStorage.removeItem(LS_CASHIER)
+      clearAuthToken()
     },
 
     /**
