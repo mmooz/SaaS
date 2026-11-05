@@ -247,3 +247,50 @@ export function fetchProducts() {
 export function fetchCategories() {
   return request('/api/categories/tree')
 }
+
+/* ---------------- 报表 ---------------- */
+
+/**
+ * 销售日报月报
+ * @param {object} params { start, end, mode }
+ * @returns {Promise<object>} 汇总与趋势
+ */
+export function fetchDailyReport(params = {}) {
+  return request(`/api/reports/daily${query({ start: params.start, end: params.end, mode: params.mode })}`)
+}
+
+/**
+ * 商品销售排行
+ * @param {object} params { start, end, limit }
+ * @returns {Promise<object>} 排行数据
+ */
+export function fetchProductRank(params = {}) {
+  return request(`/api/reports/products${query({ start: params.start, end: params.end, limit: params.limit })}`)
+}
+
+/**
+ * 时段分析
+ * @param {object} params { start, end }
+ * @returns {Promise<object>} 时段数据
+ */
+export function fetchHourlyReport(params = {}) {
+  return request(`/api/reports/hourly${query({ start: params.start, end: params.end })}`)
+}
+
+/**
+ * 毛利分析
+ * @param {object} params { start, end }
+ * @returns {Promise<object>} 毛利数据
+ */
+export function fetchProfitReport(params = {}) {
+  return request(`/api/reports/profit${query({ start: params.start, end: params.end })}`)
+}
+
+/**
+ * 会员分析
+ * @param {object} params { start, end, limit }
+ * @returns {Promise<object>} 会员分析数据
+ */
+export function fetchMemberReport(params = {}) {
+  return request(`/api/reports/members${query({ start: params.start, end: params.end, limit: params.limit })}`)
+}
