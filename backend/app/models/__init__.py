@@ -16,11 +16,18 @@ from app.models.promotion import Promotion
 from app.models.refund_item import RefundItem
 from app.models.refund_record import RefundRecord
 from app.models.shift_session import ShiftSession
+from app.models.store import Store
 from app.models.sync_record import SyncRecord
 from app.models.system_setting import SystemSetting
+from app.models.tenant import Tenant
 from app.models.user import User
+from app.models.user_store import UserStore
 
 __all__ = [
+    "Tenant",
+    "Store",
+    "User",
+    "UserStore",
     "Category",
     "Product",
     "ProductPriceHistory",
@@ -30,7 +37,6 @@ __all__ = [
     "MemberTransaction",
     "Promotion",
     "InventoryMovement",
-    "User",
     "ShiftSession",
     "RefundRecord",
     "RefundItem",

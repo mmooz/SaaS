@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -28,8 +28,14 @@ class Member(Base):
     balance: Mapped[float] = mapped_column(Float, default=0)
     # 累计消费金额
     total_spent: Mapped[float] = mapped_column(Float, default=0)
-    # 预留门店 ID（多店扩展）
-    store_id: Mapped[int] = mapped_column(Integer, default=1)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
+    # 所属门店 ID
+    store_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("stores.id"), index=True, nullable=False
+    )
     # 创建与更新时间
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

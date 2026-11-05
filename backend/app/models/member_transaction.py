@@ -20,6 +20,10 @@ class MemberTransaction(Base):
     member_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("members.id"), index=True, nullable=False
     )
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 类型：recharge=充值，consume=消费，refund=退款，points=积分变动
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     # 金额变动（正/负）

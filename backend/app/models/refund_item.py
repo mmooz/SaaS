@@ -18,6 +18,10 @@ class RefundItem(Base):
     refund_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("refund_records.id"), index=True, nullable=False
     )
+    # 所属租户 ID（从退款单继承，冗余便于按租户直接过滤）
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 原订单明细主键（用于避免同一行重复退货）
     order_item_id: Mapped[int | None] = mapped_column(BigInteger, index=True, nullable=True)
     # 商品名称（快照）

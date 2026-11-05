@@ -20,6 +20,10 @@ class OrderItem(Base):
     order_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("orders.id"), index=True, nullable=False
     )
+    # 所属租户 ID（从订单继承，冗余便于按租户直接过滤）
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 商品 ID（可空：商品删除后仍保留快照）
     product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 商品名称（快照，避免商品改名影响历史订单）

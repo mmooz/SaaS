@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -20,6 +20,10 @@ class SyncRecord(Base):
     direction: Mapped[str] = mapped_column(String(8), nullable=False)
     # 同步目标（商品/订单/库存变动等）
     target: Mapped[str] = mapped_column(String(50), nullable=False)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 最近一次成功同步时间
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 待同步数量

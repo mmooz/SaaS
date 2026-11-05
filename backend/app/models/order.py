@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Float, Integer, String, func
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -18,8 +18,14 @@ class Order(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 订单号（唯一，收银端生成，用于幂等上传）
     order_no: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
-    # 预留门店 ID（多店扩展）
-    store_id: Mapped[int] = mapped_column(Integer, default=1)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
+    # 所属门店 ID
+    store_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("stores.id"), index=True, nullable=False
+    )
     # 收银员用户 ID
     cashier_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 交接班会话 ID

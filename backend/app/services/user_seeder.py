@@ -1,10 +1,14 @@
-"""默认账号种子：开发期 users 表为空时写入演示账号，便于直接登录体验。"""
+"""默认账号种子：开发期 users 表为空时写入演示账号，便于直接登录体验。
+
+多租户改造后，种子同时创建默认租户与门店，并把演示账号挂到该租户的默认门店。
+"""
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import User
+from app.models import Store, Tenant, User, UserStore
 from app.services.password_hasher import PasswordHasher
+from app.services.snowflake import next_id
 
 
 class UserSeeder:
@@ -23,25 +27,43 @@ class UserSeeder:
 
     @classmethod
     def seed(cls, db: Session) -> int:
-        """写入尚不存在的默认账号。
+        """写入默认租户、门店与演示账号。
 
         :param db: 数据库会话
         :return: 本次新增的账号数量
         """
+        # 1. 确保存在默认租户（不存在则创建）
+        tenant = db.scalar(select(Tenant).where(Tenant.code == "default"))
+        if not tenant:
+            tenant = Tenant(name="鲜衡云演示租户", code="default", enabled=True)
+            db.add(tenant)
+            db.flush()
+
+        # 2. 确保存在默认门店（不存在则创建）
+        store = db.scalar(select(Store).where(Store.tenant_id == tenant.id, Store.name == "总店"))
+        if not store:
+            store = Store(tenant_id=tenant.id, name="总店", address="演示门店地址", phone="0000-0000000", enabled=True)
+            db.add(store)
+            db.flush()
+
+        # 3. 写入尚不存在的演示账号，并关联默认门店
         created = 0
         for username, name, role, enabled in cls.DEFAULT_USERS:
             exists = db.scalar(select(User).where(User.username == username))
             if exists:
                 continue
-            db.add(
-                User(
-                    username=username,
-                    password_hash=PasswordHasher.hash(cls.DEFAULT_PASSWORD),
-                    name=name,
-                    role=role,
-                    enabled=enabled,
-                )
+            user = User(
+                username=username,
+                password_hash=PasswordHasher.hash(cls.DEFAULT_PASSWORD),
+                name=name,
+                role=role,
+                enabled=enabled,
+                tenant_id=tenant.id,
             )
+            db.add(user)
+            db.flush()
+            # 演示账号均授权访问默认门店
+            db.add(UserStore(user_id=user.id, store_id=store.id))
             created += 1
         if created:
             db.commit()

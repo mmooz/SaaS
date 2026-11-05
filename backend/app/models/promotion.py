@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -32,7 +32,13 @@ class Promotion(Base):
     end_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # 是否启用
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    # 预留门店 ID（多店扩展）
-    store_id: Mapped[int] = mapped_column(Integer, default=1)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
+    # 所属门店 ID
+    store_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("stores.id"), index=True, nullable=False
+    )
     # 创建时间
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

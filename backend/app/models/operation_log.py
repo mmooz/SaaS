@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, String, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -18,6 +18,10 @@ class OperationLog(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 操作人用户 ID
     operator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 操作动作（如 调价/退款/盘点/登录）
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     # 操作详情（JSON 或文本）

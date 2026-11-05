@@ -30,8 +30,14 @@ class InventoryMovement(Base):
     ref_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 操作人用户 ID
     operator_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # 预留门店 ID（多店扩展）
-    store_id: Mapped[int] = mapped_column(Integer, default=1)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
+    # 所属门店 ID
+    store_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("stores.id"), index=True, nullable=False
+    )
     # 是否已同步到服务端
     synced: Mapped[bool] = mapped_column(Boolean, default=False)
     # 变动时间

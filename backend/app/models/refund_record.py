@@ -24,6 +24,10 @@ class RefundRecord(Base):
     )
     # 原订单号（冗余保存，便于查询展示）
     order_no: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 退款类型：full=整单退款，item=单项退货
     refund_type: Mapped[str] = mapped_column(String(10), default="full")
     # 退款金额

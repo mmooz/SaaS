@@ -20,6 +20,10 @@ class ProductPriceHistory(Base):
     product_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("products.id"), index=True, nullable=False
     )
+    # 所属租户 ID
+    tenant_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
+    )
     # 调价前价格
     old_price: Mapped[float] = mapped_column(Float, nullable=False)
     # 调价后价格
