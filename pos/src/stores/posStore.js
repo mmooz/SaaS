@@ -1,8 +1,8 @@
 // POS 收银状态管理（Pinia）：商品缓存、购物车、订单上传与离线队列
 
 import { defineStore } from 'pinia'
-import { PromotionEngine } from '../services/PromotionEngine'
-import { consumeMember, fetchActivePromotions, fetchSyncData, uploadOrder } from '../api'
+import { PromotionEngine } from '../services/PromotionEngine.js'
+import { consumeMember, fetchActivePromotions, fetchSyncData, uploadOrder } from '../api.js'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
