@@ -17,8 +17,10 @@ from app.api import (
     promotions,
     reports,
     shifts,
+    stores,
     sync,
     system_settings,
+    tenants,
     users,
 )
 from app.config import settings
@@ -73,6 +75,8 @@ app.include_router(sync.router)
 app.include_router(users.router)
 app.include_router(operation_logs.router)
 app.include_router(system_settings.router)
+app.include_router(tenants.router)
+app.include_router(stores.router)
 app.include_router(backups.router)
 
 
