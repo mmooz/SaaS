@@ -17,6 +17,7 @@ from app.models.refund_item import RefundItem
 from app.models.refund_record import RefundRecord
 from app.models.shift_session import ShiftSession
 from app.models.sync_record import SyncRecord
+from app.models.system_setting import SystemSetting
 from app.models.user import User
 
 __all__ = [
@@ -35,4 +36,5 @@ __all__ = [
     "RefundItem",
     "SyncRecord",
     "OperationLog",
+    "SystemSetting",
 ]
