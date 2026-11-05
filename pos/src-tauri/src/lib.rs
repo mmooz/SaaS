@@ -135,6 +135,8 @@ pub fn run() {
     // 初始状态使用模拟秤（无硬件时可正常开发调试）
     let initial_scale = ScaleFactory::create(&ScaleConnection::Mock, None, None, None);
     tauri::Builder::default()
+        // 注册本地 SQLite 插件（离线订单/退货/班次持久化）
+        .plugin(tauri_plugin_sql::Builder::default().build())
         .manage(ScaleState(Mutex::new(initial_scale)))
         .invoke_handler(tauri::generate_handler![
             connect_scale,

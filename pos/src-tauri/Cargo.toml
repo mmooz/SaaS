@@ -17,6 +17,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # 串口通信（连接电子秤）
 serialport = "4"
+# 本地 SQLite（离线数据持久化：待上传订单、退货、班次）
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 
 # Windows 原生打印（打印队列原始指令 + GBK 编码）
 [target.'cfg(target_os = "windows")'.dependencies]
