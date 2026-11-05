@@ -9,6 +9,7 @@ from app.schemas.shift_close import ShiftClose
 from app.schemas.shift_open import ShiftOpen
 from app.schemas.shift_out import ShiftOut
 from app.schemas.shift_summary_out import ShiftSummaryOut
+from app.services.operation_log_service import OperationLogService
 from app.services.shift_service import ShiftService
 
 # 交接班路由
@@ -19,6 +20,9 @@ router = APIRouter(prefix="/api/shifts", tags=["交接班"])
 def open_shift(data: ShiftOpen, db: Session = Depends(get_db)):
     """开班：已有进行中班次则直接返回该班次。"""
     shift = ShiftService.open(db, data.cashier_id, data.base_cash)
+    OperationLogService.record(
+        db, "开班", f"收银员 {data.cashier_id} 开班，底金 {data.base_cash} 元", data.cashier_id
+    )
     db.commit()
     db.refresh(shift)
     return shift
@@ -48,6 +52,12 @@ def close_shift(shift_id: int, data: ShiftClose, db: Session = Depends(get_db)):
     if shift.status == "closed":
         raise HTTPException(status_code=400, detail="该班次已交班")
     summary = ShiftService.close(db, shift, data.actual_cash)
+    OperationLogService.record(
+        db,
+        "交班",
+        f"班次 {shift_id} 交班，销售额 {summary.total_sales} 元，实际现金 {data.actual_cash or 0} 元",
+        shift.cashier_id,
+    )
     db.commit()
     db.refresh(shift)
     return summary

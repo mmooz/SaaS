@@ -14,6 +14,7 @@ from app.schemas.product_out import ProductOut
 from app.schemas.product_query import ProductQuery
 from app.schemas.product_update import ProductUpdate
 from app.services.excel_service import excel_service
+from app.services.operation_log_service import OperationLogService
 
 # 商品路由
 router = APIRouter(prefix="/api/products", tags=["商品管理"])
@@ -112,6 +113,8 @@ def batch_adjust_price(data: BatchPriceRequest, db: Session = Depends(get_db)):
             product.price = new_price
 
     db.commit()
+    OperationLogService.record(db, "批量改价", f"调整 {len(products)} 个商品价格")
+    db.commit()
     return {"message": f"已调整 {len(products)} 个商品的价格"}
 
 
@@ -133,6 +136,8 @@ def create_product(data: ProductCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="条码已存在")
     product = Product(**data.model_dump())
     db.add(product)
+    db.flush()
+    OperationLogService.record(db, "新增商品", f"新增商品 {product.name}（{product.barcode}）")
     db.commit()
     db.refresh(product)
     return product
@@ -181,6 +186,10 @@ def delete_product(product_id: int, db: Session = Depends(get_db)):
     product = db.get(Product, product_id)
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
+    # 先取出名称/条码，删除提交后对象将失效
+    name, barcode = product.name, product.barcode
     db.delete(product)
+    db.commit()
+    OperationLogService.record(db, "删除商品", f"删除商品 {name}（{barcode}）")
     db.commit()
     return {"message": "删除成功"}

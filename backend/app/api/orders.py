@@ -13,6 +13,7 @@ from app.schemas.order_out import OrderOut
 from app.schemas.refund_create import RefundCreate
 from app.schemas.refund_out import RefundOut
 from app.services.inventory_service import InventoryService
+from app.services.operation_log_service import OperationLogService
 from app.services.refund_service import RefundService
 
 # 订单路由
@@ -202,6 +203,13 @@ def refund_order(order_no: str, data: RefundCreate, db: Session = Depends(get_db
         record = RefundService.refund(db, order, data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # 记录退款操作日志
+    OperationLogService.record(
+        db,
+        "退款",
+        f"订单 {order_no} 退款 {record.amount} 元（{'整单' if data.refund_type == 'full' else '单项'}）",
+        data.cashier_id or order.cashier_id,
+    )
     db.commit()
     db.refresh(record)
     return record

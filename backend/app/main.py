@@ -5,7 +5,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, categories, inventory, members, orders, products, promotions, reports, shifts, sync
+from app.api import (
+    auth,
+    backups,
+    categories,
+    inventory,
+    members,
+    operation_logs,
+    orders,
+    products,
+    promotions,
+    reports,
+    shifts,
+    sync,
+    system_settings,
+    users,
+)
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app import models  # 导入模型模块，确保建表时注册所有表
@@ -55,6 +70,10 @@ app.include_router(inventory.router)
 app.include_router(reports.router)
 app.include_router(shifts.router)
 app.include_router(sync.router)
+app.include_router(users.router)
+app.include_router(operation_logs.router)
+app.include_router(system_settings.router)
+app.include_router(backups.router)
 
 
 @app.get("/api/health")

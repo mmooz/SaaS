@@ -11,6 +11,7 @@ from app.schemas.login_request import LoginRequest
 from app.schemas.login_response import LoginResponse
 from app.schemas.user_out import UserOut
 from app.services.password_hasher import PasswordHasher
+from app.services.operation_log_service import OperationLogService
 from app.services.token_service import TokenService
 
 # 登录路由
@@ -48,6 +49,9 @@ def login(data: LoginRequest, db: Session = Depends(get_db)):
     # 停用账号禁止登录
     if not user.enabled:
         raise HTTPException(status_code=403, detail="账号已停用，请联系管理员")
+    # 记录登录日志
+    OperationLogService.record(db, "登录", f"用户 {user.username} 登录成功", user.id)
+    db.commit()
     return LoginResponse(
         access_token=token_service.issue(user.id),
         expires_in=token_service.expire_seconds,
