@@ -10,6 +10,7 @@ from app.database import get_db
 from app.models import Order, OrderItem
 from app.schemas.order_create import OrderCreate
 from app.schemas.order_out import OrderOut
+from app.services.inventory_service import InventoryService
 
 # 订单路由
 router = APIRouter(prefix="/api/orders", tags=["订单管理"])
@@ -52,6 +53,9 @@ def create_order(data: OrderCreate, db: Session = Depends(get_db)):
             )
         )
     db.add(order)
+    # 先落库主表以获取订单 ID，再由库存服务按明细扣减库存
+    db.flush()
+    InventoryService.deduct_for_order(db, order)
     db.commit()
     db.refresh(order)
     return order
