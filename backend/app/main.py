@@ -1,9 +1,11 @@
-"""FastAPI 应用入口：创建应用、注册路由与启动初始化。"""
+"""FastAPI 应用入口：创建应用、注册路由、CORS 与启动初始化。"""
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
+from app.api import categories, products, sync
 from app.config import settings
 from app.database import Base, engine
 from app import models  # 导入模型模块，确保建表时注册所有表
@@ -23,6 +25,25 @@ app = FastAPI(
     version=settings.app_version,
     lifespan=lifespan,
 )
+
+# 跨域配置：允许前后端开发服务器访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 注册业务路由
+app.include_router(categories.router)
+app.include_router(products.router)
+app.include_router(sync.router)
 
 
 @app.get("/api/health")
