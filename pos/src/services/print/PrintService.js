@@ -213,6 +213,18 @@ export class PrintService {
   }
 
   /**
+   * 判断原生打印错误是否由打印机状态问题导致（缺纸/离线/卡纸等）
+   * 此类错误应明确提示收银员，而非静默回退 HTML 打印
+   * @param {Error} err 原生打印异常
+   * @returns {boolean} 是打印机状态问题时为 true
+   */
+  static isPrinterStatusError(err) {
+    const msg = (err && err.message) ? err.message : String(err || '')
+    // Rust 层在打印前检测到状态异常时返回「打印机「xxx」缺纸」等文案
+    return /打印机「.*」(缺纸|离线|卡纸|已暂停|故障|不可用|需要人工处理|墨粉不足|纸盒门未关闭|出纸仓已满|状态异常)/.test(msg)
+  }
+
+  /**
    * 打印小票：原生直连优先，未配置时回退 HTML
    * @param {object} order 小票数据模型（见 ReceiptTemplate）
    * @param {object|null} overrideInfo 临时打印配置（测试打印使用页面当前表单）
@@ -229,6 +241,10 @@ export class PrintService {
         await TauriPrintService.printReceipt(printerName, this.buildReceiptJob(order, info))
         return { channel: 'native', reason: '' }
       } catch (err) {
+        // 打印机状态问题（缺纸/离线等）直接提示，不回退 HTML
+        if (this.isPrinterStatusError(err)) {
+          return { channel: 'failed', reason: err.message }
+        }
         console.warn('原生打印小票失败，回退 HTML 打印：', err)
       }
     }
@@ -254,6 +270,9 @@ export class PrintService {
         await TauriPrintService.printLabels(printerName, this.buildLabelJob(order, [item], info))
         return { channel: 'native', reason: '' }
       } catch (err) {
+        if (this.isPrinterStatusError(err)) {
+          return { channel: 'failed', reason: err.message }
+        }
         console.warn('原生打印标签失败，回退 HTML 打印：', err)
       }
     }
@@ -284,6 +303,9 @@ export class PrintService {
         )
         return { channel: 'native', count: Number(count) || list.length, reason: '' }
       } catch (err) {
+        if (this.isPrinterStatusError(err)) {
+          return { channel: 'failed', count: 0, reason: err.message }
+        }
         console.warn('原生打印标签失败，回退 HTML 打印：', err)
       }
     }

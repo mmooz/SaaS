@@ -68,6 +68,9 @@ impl WinSpooler {
 
     /// 把原始指令作为打印作业发送到指定打印机
     ///
+    /// 打印前先用 GetPrinter 读取状态位，打印机缺纸/离线/卡纸等不可用状态直接拒绝打印；
+    /// 打印过程中若失败，回读状态位补充具体问题到错误信息，便于收银端提示。
+    ///
     /// # 参数
     /// - printer_name：系统打印机名称
     /// - data：ESC/POS 或 TSPL 指令字节
@@ -92,6 +95,23 @@ impl WinSpooler {
                 ));
             }
 
+            // 打印前状态检测：不可用时直接返回，避免无效作业占用打印队列
+            match Self::read_status(handle, printer_name) {
+                Ok(status) if !status.usable => {
+                    ClosePrinter(handle);
+                    let problems = if status.problems.is_empty() {
+                        "状态异常".to_string()
+                    } else {
+                        status.problems.join("、")
+                    };
+                    return Err(format!("打印机「{}」{}", printer_name, problems));
+                }
+                Err(_) => {
+                    // 状态读取失败不阻断打印，交由后续打印结果决定
+                }
+                _ => {}
+            }
+
             let mut doc_name = Self::wide("POS 打印任务");
             let mut data_type = Self::wide("RAW");
             let doc_info = DOC_INFO_1W {
@@ -102,14 +122,24 @@ impl WinSpooler {
 
             let job_id = StartDocPrinterW(handle, 1, &doc_info);
             if job_id == 0 {
+                let err = std::io::Error::last_os_error();
+                let detail = Self::status_problem_text(handle, printer_name);
                 ClosePrinter(handle);
-                return Err(format!("创建打印作业失败：{}", std::io::Error::last_os_error()));
+                return Err(match detail {
+                    Some(text) => format!("创建打印作业失败：{}（{}）", err, text),
+                    None => format!("创建打印作业失败：{}", err),
+                });
             }
 
             if StartPagePrinter(handle) == 0 {
+                let err = std::io::Error::last_os_error();
+                let detail = Self::status_problem_text(handle, printer_name);
                 EndDocPrinter(handle);
                 ClosePrinter(handle);
-                return Err(format!("开始打印页失败：{}", std::io::Error::last_os_error()));
+                return Err(match detail {
+                    Some(text) => format!("开始打印页失败：{}（{}）", err, text),
+                    None => format!("开始打印页失败：{}", err),
+                });
             }
 
             let mut written = 0u32;
@@ -135,6 +165,28 @@ impl WinSpooler {
                 ));
             }
             Ok(())
+        }
+    }
+
+    /// 回读打印机状态位并返回问题文案（打印失败时用于补充错误原因）
+    ///
+    /// # 参数
+    /// - handle：已打开的打印机句柄
+    /// - printer_name：打印机名称
+    ///
+    /// # 返回
+    /// - `Some(String)`：存在异常状态时返回问题描述
+    /// - `None`：状态正常或读取失败
+    unsafe fn status_problem_text(handle: PRINTER_HANDLE, printer_name: &str) -> Option<String> {
+        match Self::read_status(handle, printer_name) {
+            Ok(status) if !status.usable && !status.problems.is_empty() => {
+                Some(format!(
+                    "打印机「{}」{}",
+                    printer_name,
+                    status.problems.join("、")
+                ))
+            }
+            _ => None,
         }
     }
 
