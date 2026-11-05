@@ -1,7 +1,7 @@
 // POS 收银状态管理（Pinia）：商品缓存、购物车、订单上传与离线队列
 
 import { defineStore } from 'pinia'
-import { fetchSyncData, uploadOrder } from '../api'
+import { consumeMember, fetchSyncData, uploadOrder } from '../api'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
@@ -34,6 +34,8 @@ export const usePosStore = defineStore('pos', {
     lastSyncTime: null,
     // 当前收银员
     cashier: null,
+    // 当前识别的会员（null 表示散客）
+    member: null,
     // 购物车
     cart: loadLS(LS_CART, []),
     // 挂单列表
@@ -43,9 +45,36 @@ export const usePosStore = defineStore('pos', {
   }),
 
   getters: {
-    // 购物车应收合计
+    // 是否已识别会员（决定会员价是否生效）
+    memberActive(state) {
+      return !!state.member
+    },
+    // 购物车单品成交单价：会员已识别且商品有会员价时优先用会员价
+    itemPrice(state) {
+      return (item) => (state.member && item.memberPrice ? item.memberPrice : item.price)
+    },
+    // 购物车单品成交金额：按件=单价×数量，称重=单价×重量
+    itemAmount(state) {
+      return (item) => {
+        const price = state.member && item.memberPrice ? item.memberPrice : item.price
+        const raw = item.weighted ? price * item.weight : price * item.qty
+        return +raw.toFixed(2)
+      }
+    },
+    // 购物车应收合计（含会员价）
     totalAmount(state) {
-      return state.cart.reduce((sum, i) => sum + i.amount, 0)
+      return state.cart.reduce((sum, i) => {
+        const price = state.member && i.memberPrice ? i.memberPrice : i.price
+        const raw = i.weighted ? price * i.weight : price * i.qty
+        return sum + +raw.toFixed(2)
+      }, 0)
+    },
+    // 购物车按零售价计算的合计（用于展示会员优惠金额）
+    retailAmount(state) {
+      return state.cart.reduce((sum, i) => {
+        const raw = i.weighted ? i.price * i.weight : i.price * i.qty
+        return sum + +raw.toFixed(2)
+      }, 0)
     },
     // 购物车商品数
     cartCount(state) {
@@ -90,6 +119,21 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
+     * 设置当前识别会员（会员价与储值支付随之生效）
+     * @param {object|null} member 会员信息
+     */
+    setMember(member) {
+      this.member = member
+    },
+
+    /**
+     * 清除当前会员（切换为散客）
+     */
+    clearMember() {
+      this.member = null
+    },
+
+    /**
      * 根据分类 ID 获取分类名称（用于商品列表展示）
      * @param {number|null} categoryId 分类 ID
      * @returns {string} 分类名称
@@ -113,6 +157,7 @@ export const usePosStore = defineStore('pos', {
           productId: product.id,
           name: product.name,
           price: product.price,
+          memberPrice: product.memberPrice || null,
           qty: 1,
           weighted: false,
           amount: product.price,
@@ -133,6 +178,7 @@ export const usePosStore = defineStore('pos', {
         productId: product.id,
         name: product.name,
         price: product.price,
+        memberPrice: product.memberPrice || null,
         qty: 1,
         weighted: true,
         weight: +weight.toFixed(2),
@@ -192,41 +238,63 @@ export const usePosStore = defineStore('pos', {
 
     /**
      * 结算：生成订单号并上传服务端；失败则进入离线队列
-     * @param {object} payload { payMethod, cashReceived, memberId, remark }
-     * @returns {Promise<{ok:boolean, orderNo:string, order:object}>} 上传结果与本次订单数据
+     * 已识别会员时按会员价计价，储值支付成功后再扣减会员余额
+     * @param {object} payload { payMethod, cashReceived, remark }
+     * @returns {Promise<{ok:boolean, orderNo:string, order:object, memberDeducted:boolean}>} 上传结果与本次订单数据
      */
     async settle(payload) {
       const orderNo = this.buildOrderNo()
-      const payDetails = JSON.stringify({ [payload.payMethod]: this.totalAmount })
-      const order = {
-        order_no: orderNo,
-        cashier_id: this.cashier ? this.cashier.id : null,
-        status: 'paid',
-        total_amount: +this.totalAmount.toFixed(2),
-        discount_amount: 0,
-        pay_details: payDetails,
-        member_id: payload.memberId || null,
-        items: this.cart.map((i) => ({
+      // 请求中快照会员，避免结算过程中会员状态被清除
+      const member = this.member
+      // 逐项按会员价/零售价计算成交金额
+      const items = this.cart.map((i) => {
+        const unitPrice = member && i.memberPrice ? i.memberPrice : i.price
+        const amount = +((i.weighted ? unitPrice * i.weight : unitPrice * i.qty)).toFixed(2)
+        return {
           product_id: i.productId,
           name: i.name,
           qty: i.qty,
           weight_kg: i.weighted ? i.weight : null,
-          unit_price: i.price,
-          amount: i.amount,
+          unit_price: unitPrice,
+          amount,
           is_weighted: i.weighted,
           label_printed: i.weighted,
-        })),
+        }
+      })
+      const total = +items.reduce((sum, i) => sum + i.amount, 0).toFixed(2)
+      // 会员优惠金额 = 零售价合计 − 成交合计
+      const discount = +(this.retailAmount - total).toFixed(2)
+      const payDetails = JSON.stringify({ [payload.payMethod]: total })
+      const order = {
+        order_no: orderNo,
+        cashier_id: this.cashier ? this.cashier.id : null,
+        status: 'paid',
+        total_amount: total,
+        discount_amount: discount > 0 ? discount : 0,
+        pay_details: payDetails,
+        member_id: member ? member.id : null,
+        items,
       }
       try {
         await uploadOrder(order)
         this.clearCart()
-        return { ok: true, orderNo, order }
+        // 储值支付：在线扣减会员余额并按金额累计积分
+        let memberDeducted = false
+        if (member && payload.payMethod === '储值') {
+          try {
+            this.member = await consumeMember(member.id, { amount: total, orderNo })
+            memberDeducted = true
+          } catch {
+            memberDeducted = false // 扣款失败不阻塞结算，由后台对账处理
+          }
+        }
+        return { ok: true, orderNo, order, memberDeducted }
       } catch (err) {
         // 上传失败：进入离线队列，本地保留待重传
         this.offlineOrders.push(order)
         localStorage.setItem(LS_OFFLINE, JSON.stringify(this.offlineOrders))
         this.clearCart()
-        return { ok: false, orderNo, order }
+        return { ok: false, orderNo, order, memberDeducted: false }
       }
     },
 

@@ -72,13 +72,13 @@
               <div class="ci-name">{{ item.name }}</div>
               <div class="ci-sub num">
                 <template v-if="item.weighted">
-                  {{ item.weight.toFixed(2) }} kg × ¥{{ item.price.toFixed(2) }}
+                  {{ item.weight.toFixed(2) }} kg × ¥{{ store.itemPrice(item).toFixed(2) }}
                 </template>
-                <template v-else>× {{ item.qty }}</template>
+                <template v-else>× {{ item.qty }} · ¥{{ store.itemPrice(item).toFixed(2) }}</template>
               </div>
             </div>
             <div class="ci-right">
-              <div class="ci-amount num">¥{{ item.amount.toFixed(2) }}</div>
+              <div class="ci-amount num">¥{{ store.itemAmount(item).toFixed(2) }}</div>
               <div class="ci-ops">
                 <button class="op-btn" @click="store.decItem(item)">−</button>
                 <button class="op-btn" @click="store.incItem(item)">+</button>
@@ -111,12 +111,31 @@
         </div>
 
         <div class="total-card">
+          <!-- 会员识别卡：散客 / 已识别会员 -->
+          <div class="member-card" :class="{ active: store.memberActive }">
+            <template v-if="store.member">
+              <div class="member-main">
+                <div class="member-name">
+                  {{ store.member.name || '会员' }}
+                  <span class="member-level">{{ levelText(store.member.level) }}</span>
+                </div>
+                <div class="member-sub num">
+                  {{ store.member.mobile }} · 积分 {{ store.member.points }} · 余额 ¥{{ store.member.balance.toFixed(2) }}
+                </div>
+              </div>
+              <el-button text type="danger" size="small" @click="store.clearMember">取消会员</el-button>
+            </template>
+            <template v-else>
+              <div class="member-sub">散客 · 识别会员享会员价</div>
+              <el-button size="small" type="primary" @click="openMemberDialog">会员识别</el-button>
+            </template>
+          </div>
           <div class="total-row">
             <span>应收合计</span>
             <span class="total-value num">¥{{ store.totalAmount.toFixed(2) }}</span>
           </div>
-          <div class="discount-row num" v-if="discount > 0">
-            优惠 −¥{{ discount.toFixed(2) }}
+          <div class="discount-row num" v-if="memberDiscount > 0">
+            会员优惠 −¥{{ memberDiscount.toFixed(2) }}
           </div>
           <div v-if="store.hasOfflineOrders" class="offline-tip">
             有 {{ store.offlineOrders.length }} 笔订单待上传
@@ -167,7 +186,10 @@
           </div>
         </div>
         <div v-else-if="payMethod === '储值'" class="cash-input">
-          <el-input v-model="memberMobile" size="large" placeholder="输入会员手机号" />
+          <div v-if="store.member" class="member-pay-info num">
+            会员余额 ¥{{ store.member.balance.toFixed(2) }} · 本单应收 ¥{{ store.totalAmount.toFixed(2) }}
+          </div>
+          <div v-else class="pay-tip">请先识别会员后再使用储值支付</div>
         </div>
         <div v-else class="scan-tip">
           <div class="scan-icon">📷</div>
@@ -177,6 +199,26 @@
         <el-button type="primary" size="large" class="confirm-pay" @click="confirmPay">
           确认收款
         </el-button>
+      </div>
+    </el-dialog>
+
+    <!-- 会员识别弹窗 -->
+    <el-dialog v-model="memberDialog" title="会员识别" width="420px">
+      <div class="member-dialog">
+        <el-input
+          v-model="memberInputMobile"
+          size="large"
+          placeholder="输入手机号 / 扫描会员码"
+          clearable
+          @keyup.enter="identifyMember"
+        />
+        <div class="member-actions">
+          <el-button size="large" @click="identifyMember">查 询</el-button>
+          <el-button size="large" type="primary" :loading="memberLoading" @click="registerMember">
+            快速建档
+          </el-button>
+        </div>
+        <div class="member-tip">新顾客可直接建档，建档后立即识别并享会员价</div>
       </div>
     </el-dialog>
   </div>
@@ -192,6 +234,7 @@ import {
 import { usePosStore } from '../stores/posStore'
 import { PrintService } from '../services/print/PrintService'
 import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
+import { createMember, fetchMemberByMobile } from '../api'
 
 const router = useRouter()
 const store = usePosStore()
@@ -219,19 +262,21 @@ const fallbackProducts = [
 /* ---------- 商品来源：优先后端同步数据，空则用演示数据 ---------- */
 const products = computed(() => {
   if (store.products.length) {
-    // 后端商品字段转换：pricing_mode -> pricingMode
+    // 后端商品字段转换：pricing_mode -> pricingMode，member_price -> memberPrice
     return store.products.map((p) => ({
       id: p.id,
       name: p.name,
       price: p.price,
       unit: p.unit,
       pricingMode: p.pricing_mode,
+      memberPrice: p.member_price ?? null,
       pinyin: p.pinyin || '',
       cate: store.categoryName(p.category_id) || '',
       barcode: p.barcode,
     }))
   }
-  return fallbackProducts
+  // 演示数据统一按零售价 95 折生成会员价
+  return fallbackProducts.map((p) => ({ ...p, memberPrice: +(p.price * 0.95).toFixed(2) }))
 })
 
 // 分类页签：'全部' + 后端一级分类名（无数据时用演示数据分类）
@@ -256,8 +301,8 @@ const filteredProducts = computed(() => {
 
 /* ---------- 添加商品 ---------- */
 const currentProduct = ref(null)
-// 整单优惠金额（预留促销规则引擎，S5 实现）
-const discount = ref(0)
+// 会员优惠金额（零售价合计 − 会员价成交合计）
+const memberDiscount = computed(() => +(store.retailAmount - store.totalAmount).toFixed(2))
 
 // 添加商品：按件直接入单，称重进入称重流程
 const addProduct = (p) => {
@@ -348,11 +393,64 @@ const doZero = () => {
   ElMessage.success('已置零')
 }
 
+/* ---------- 会员识别 ---------- */
+const memberDialog = ref(false) // 会员识别弹窗
+const memberInputMobile = ref('') // 待识别的手机号
+const memberLoading = ref(false) // 建档/查询请求中
+
+// 打开会员识别弹窗（清空上次输入）
+const openMemberDialog = () => {
+  memberInputMobile.value = ''
+  memberDialog.value = true
+}
+
+// 等级文案
+const levelText = (level) => ({ normal: '普通会员', silver: '银卡', gold: '金卡' }[level] || '普通会员')
+
+// 按手机号识别会员
+const identifyMember = async () => {
+  const mobile = memberInputMobile.value.trim()
+  if (!mobile) {
+    ElMessage.warning('请输入会员手机号')
+    return
+  }
+  memberLoading.value = true
+  try {
+    const member = await fetchMemberByMobile(mobile)
+    store.setMember(member)
+    memberDialog.value = false
+    ElMessage.success(`已识别会员：${member.name || member.mobile}`)
+  } catch (err) {
+    ElMessage.warning(err.message === '会员不存在' ? '未找到会员，可点击“快速建档”' : err.message)
+  } finally {
+    memberLoading.value = false
+  }
+}
+
+// 快速建档并直接识别
+const registerMember = async () => {
+  const mobile = memberInputMobile.value.trim()
+  if (!mobile) {
+    ElMessage.warning('请输入手机号')
+    return
+  }
+  memberLoading.value = true
+  try {
+    const member = await createMember({ mobile })
+    store.setMember(member)
+    memberDialog.value = false
+    ElMessage.success('建档成功，已识别会员')
+  } catch (err) {
+    ElMessage.error(err.message)
+  } finally {
+    memberLoading.value = false
+  }
+}
+
 /* ---------- 支付 ---------- */
 const payDialog = ref(false)
 const payMethod = ref('现金')
 const cashReceived = ref('')
-const memberMobile = ref('')
 
 // 找零计算
 const changeAmount = computed(() => {
@@ -365,6 +463,18 @@ const openPay = (method) => {
   if (store.cart.length === 0) {
     ElMessage.warning('购物车为空')
     return
+  }
+  // 储值支付必须先识别会员且有足够余额
+  if (method === '储值') {
+    if (!store.member) {
+      ElMessage.warning('请先识别会员')
+      openMemberDialog()
+      return
+    }
+    if (store.member.balance < store.totalAmount) {
+      ElMessage.warning('会员储值余额不足')
+      return
+    }
   }
   payMethod.value = method
   payDialog.value = true
@@ -387,9 +497,15 @@ const confirmPay = async () => {
       return
     }
   }
-  if (payMethod.value === '储值' && !memberMobile.value) {
-    ElMessage.warning('请输入会员手机号')
-    return
+  if (payMethod.value === '储值') {
+    if (!store.member) {
+      ElMessage.warning('请先识别会员')
+      return
+    }
+    if (store.member.balance < store.totalAmount) {
+      ElMessage.warning('会员储值余额不足')
+      return
+    }
   }
   // 结算前快照，用于结算后打印（settle 会清空购物车）
   const meta = {
@@ -397,17 +513,25 @@ const confirmPay = async () => {
     payMethod: payMethod.value,
     cashReceived: payMethod.value === '现金' ? parseFloat(cashReceived.value) : undefined,
     change: payMethod.value === '现金' ? changeAmount.value : undefined,
-    memberMobile: memberMobile.value,
+    memberMobile: store.member ? store.member.mobile : '',
   }
   const weightedCount = store.cart.filter((i) => i.weighted).length
   // 结算会清空购物车，先记录应收金额用于提示文案
   const total = store.totalAmount
   payDialog.value = false
-  const result = await store.settle({ payMethod: payMethod.value, memberId: null })
+  const result = await store.settle({ payMethod: payMethod.value })
   if (result.ok) {
     ElMessage.success(
       `收款成功 ¥${total.toFixed(2)} · 已上传订单${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,
     )
+    // 储值扣款与积分累计结果提示
+    if (payMethod.value === '储值') {
+      if (result.memberDeducted && store.member) {
+        ElMessage.success(`储值已扣款 · 当前余额 ¥${store.member.balance.toFixed(2)} · 积分 ${store.member.points}`)
+      } else {
+        ElMessage.warning('储值扣款失败，请到后台核对会员余额')
+      }
+    }
   } else {
     ElMessage.warning('网络异常，订单已本地保存，联网后自动上传')
   }
@@ -418,7 +542,6 @@ const confirmPay = async () => {
     setTimeout(() => PrintService.printLabels(printOrder), 1200)
   }
   cashReceived.value = ''
-  memberMobile.value = ''
 }
 
 // 结算快捷键 F9
@@ -827,6 +950,46 @@ onBeforeUnmount(() => {
   text-align: right;
   margin-bottom: 12px;
 }
+
+/* ----- 会员识别卡 ----- */
+.member-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px dashed var(--neutral-300);
+  border-radius: var(--radius-md);
+  background: var(--neutral-50);
+}
+.member-card.active {
+  border: 1px solid var(--brand);
+  background: var(--brand-soft);
+}
+.member-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--neutral-900);
+}
+.member-level {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--brand-deep);
+  background: #fff;
+  border: 1px solid var(--brand);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-left: 4px;
+}
+.member-sub {
+  font-size: 13px;
+  color: var(--neutral-500);
+  margin-top: 3px;
+}
+.member-main {
+  min-width: 0;
+}
 .offline-tip {
   font-size: 13px;
   color: var(--warning);
@@ -911,6 +1074,31 @@ onBeforeUnmount(() => {
   margin-top: 8px;
   height: 48px;
   font-size: 18px;
+}
+
+/* ----- 会员识别弹窗 ----- */
+.member-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.member-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.member-tip {
+  font-size: 13px;
+  color: var(--neutral-400);
+  text-align: center;
+}
+.member-pay-info {
+  font-size: 16px;
+  color: var(--neutral-700);
+}
+.pay-tip {
+  font-size: 15px;
+  color: var(--warning);
 }
 
 /* ----- 挂单抽屉 ----- */

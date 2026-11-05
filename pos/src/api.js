@@ -78,3 +78,47 @@ export function fetchOrders({ start, end, status, page = 1, pageSize = 20 } = {}
 export function fetchOrderByNo(orderNo) {
   return request(`/api/orders/${encodeURIComponent(orderNo)}`)
 }
+
+/**
+ * 按手机号查询会员（收银端会员识别）
+ * @param {string} mobile 会员手机号
+ * @returns {Promise<object>} 会员信息
+ */
+export function fetchMemberByMobile(mobile) {
+  return request(`/api/members/${encodeURIComponent(mobile)}`)
+}
+
+/**
+ * 新建会员档案
+ * @param {object} data { mobile, name }
+ * @returns {Promise<object>} 新建的会员信息
+ */
+export function createMember(data) {
+  return request('/api/members', { method: 'POST', body: JSON.stringify(data) })
+}
+
+/**
+ * 会员储值充值
+ * @param {number} memberId 会员 ID
+ * @param {object} data { amount, bonusPoints }
+ * @returns {Promise<object>} 更新后的会员信息
+ */
+export function rechargeMember(memberId, data) {
+  return request(`/api/members/${memberId}/recharge`, {
+    method: 'POST',
+    body: JSON.stringify({ amount: data.amount, bonus_points: data.bonusPoints || 0 }),
+  })
+}
+
+/**
+ * 会员储值消费扣款（同时累计积分）
+ * @param {number} memberId 会员 ID
+ * @param {object} data { amount, orderNo }
+ * @returns {Promise<object>} 更新后的会员信息
+ */
+export function consumeMember(memberId, data) {
+  return request(`/api/members/${memberId}/consume`, {
+    method: 'POST',
+    body: JSON.stringify({ amount: data.amount, order_no: data.orderNo || null }),
+  })
+}
