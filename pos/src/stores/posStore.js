@@ -1,10 +1,12 @@
 // POS 收银状态管理（Pinia）：商品缓存、购物车、订单上传与离线队列
 
 import { defineStore } from 'pinia'
-import { consumeMember, fetchSyncData, uploadOrder } from '../api'
+import { PromotionEngine } from '../services/PromotionEngine'
+import { consumeMember, fetchActivePromotions, fetchSyncData, uploadOrder } from '../api'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
+const LS_PROMOTIONS = 'pos_promotions' // 生效促销本地缓存
 const LS_CART = 'pos_cart' // 购物车本地缓存
 const LS_HANG = 'pos_hang_orders' // 挂单本地缓存
 const LS_OFFLINE = 'pos_offline_orders' // 待上传订单队列
@@ -36,6 +38,8 @@ export const usePosStore = defineStore('pos', {
     cashier: null,
     // 当前识别的会员（null 表示散客）
     member: null,
+    // 当前生效的促销规则
+    promotions: loadLS(LS_PROMOTIONS, []),
     // 购物车
     cart: loadLS(LS_CART, []),
     // 挂单列表
@@ -49,32 +53,44 @@ export const usePosStore = defineStore('pos', {
     memberActive(state) {
       return !!state.member
     },
-    // 购物车单品成交单价：会员已识别且商品有会员价时优先用会员价
+    // 购物车单品成交单价：零售价、会员价与促销价取最低
     itemPrice(state) {
-      return (item) => (state.member && item.memberPrice ? item.memberPrice : item.price)
+      return (item) => PromotionEngine.itemPrice(item, state.promotions, state.member)
     },
     // 购物车单品成交金额：按件=单价×数量，称重=单价×重量
     itemAmount(state) {
       return (item) => {
-        const price = state.member && item.memberPrice ? item.memberPrice : item.price
+        const price = PromotionEngine.itemPrice(item, state.promotions, state.member)
         const raw = item.weighted ? price * item.weight : price * item.qty
         return +raw.toFixed(2)
       }
     },
-    // 购物车应收合计（含会员价）
-    totalAmount(state) {
+    // 购物车单品优惠后小计（会员价/特价已生效，未含满减）
+    subtotalAmount(state) {
       return state.cart.reduce((sum, i) => {
-        const price = state.member && i.memberPrice ? i.memberPrice : i.price
+        const price = PromotionEngine.itemPrice(i, state.promotions, state.member)
         const raw = i.weighted ? price * i.weight : price * i.qty
         return sum + +raw.toFixed(2)
       }, 0)
     },
-    // 购物车按零售价计算的合计（用于展示会员优惠金额）
+    // 整单满减优惠金额
+    orderDiscount(state) {
+      return PromotionEngine.orderDiscount(this.subtotalAmount, state.promotions)
+    },
+    // 应收合计（单品优惠 + 满减后）
+    totalAmount() {
+      return +Math.max(0, this.subtotalAmount - this.orderDiscount).toFixed(2)
+    },
+    // 购物车按零售价计算的合计（用于展示优惠金额）
     retailAmount(state) {
       return state.cart.reduce((sum, i) => {
         const raw = i.weighted ? i.price * i.weight : i.price * i.qty
         return sum + +raw.toFixed(2)
       }, 0)
+    },
+    // 单品层面优惠金额（会员价/特价合计）
+    itemDiscount() {
+      return Math.max(0, +(this.retailAmount - this.subtotalAmount).toFixed(2))
     },
     // 购物车商品数
     cartCount(state) {
@@ -105,6 +121,14 @@ export const usePosStore = defineStore('pos', {
         this.lastSyncTime = data.server_time
         this.syncState = 'synced'
         this.syncError = ''
+        // 促销规则单独拉取，失败不影响商品同步
+        try {
+          const promos = await fetchActivePromotions()
+          this.promotions = promos
+          localStorage.setItem(LS_PROMOTIONS, JSON.stringify(promos))
+        } catch {
+          // 保留本地缓存的促销规则，下次同步再更新
+        }
       } catch (err) {
         this.syncState = 'error'
         this.syncError = err.message
@@ -158,6 +182,7 @@ export const usePosStore = defineStore('pos', {
           name: product.name,
           price: product.price,
           memberPrice: product.memberPrice || null,
+          categoryId: product.categoryId ?? null,
           qty: 1,
           weighted: false,
           amount: product.price,
@@ -179,6 +204,7 @@ export const usePosStore = defineStore('pos', {
         name: product.name,
         price: product.price,
         memberPrice: product.memberPrice || null,
+        categoryId: product.categoryId ?? null,
         qty: 1,
         weighted: true,
         weight: +weight.toFixed(2),
@@ -246,9 +272,9 @@ export const usePosStore = defineStore('pos', {
       const orderNo = this.buildOrderNo()
       // 请求中快照会员，避免结算过程中会员状态被清除
       const member = this.member
-      // 逐项按会员价/零售价计算成交金额
+      // 逐项按零售价/会员价/促销价取最低计价
       const items = this.cart.map((i) => {
-        const unitPrice = member && i.memberPrice ? i.memberPrice : i.price
+        const unitPrice = PromotionEngine.itemPrice(i, this.promotions, member)
         const amount = +((i.weighted ? unitPrice * i.weight : unitPrice * i.qty)).toFixed(2)
         return {
           product_id: i.productId,
@@ -261,8 +287,11 @@ export const usePosStore = defineStore('pos', {
           label_printed: i.weighted,
         }
       })
-      const total = +items.reduce((sum, i) => sum + i.amount, 0).toFixed(2)
-      // 会员优惠金额 = 零售价合计 − 成交合计
+      const subtotal = +items.reduce((sum, i) => sum + i.amount, 0).toFixed(2)
+      // 整单满减优惠
+      const orderDiscount = PromotionEngine.orderDiscount(subtotal, this.promotions)
+      const total = +Math.max(0, subtotal - orderDiscount).toFixed(2)
+      // 优惠金额 = 零售价合计 − 实收合计（含会员价/特价/满减）
       const discount = +(this.retailAmount - total).toFixed(2)
       const payDetails = JSON.stringify({ [payload.payMethod]: total })
       const order = {

@@ -134,8 +134,11 @@
             <span>应收合计</span>
             <span class="total-value num">¥{{ store.totalAmount.toFixed(2) }}</span>
           </div>
-          <div class="discount-row num" v-if="memberDiscount > 0">
-            会员优惠 −¥{{ memberDiscount.toFixed(2) }}
+          <div class="discount-row num" v-if="store.itemDiscount > 0">
+            优惠（会员价/特价） −¥{{ store.itemDiscount.toFixed(2) }}
+          </div>
+          <div class="discount-row num" v-if="store.orderDiscount > 0">
+            满减优惠 −¥{{ store.orderDiscount.toFixed(2) }}
           </div>
           <div v-if="store.hasOfflineOrders" class="offline-tip">
             有 {{ store.offlineOrders.length }} 笔订单待上传
@@ -270,6 +273,7 @@ const products = computed(() => {
       unit: p.unit,
       pricingMode: p.pricing_mode,
       memberPrice: p.member_price ?? null,
+      categoryId: p.category_id ?? null,
       pinyin: p.pinyin || '',
       cate: store.categoryName(p.category_id) || '',
       barcode: p.barcode,
@@ -301,8 +305,6 @@ const filteredProducts = computed(() => {
 
 /* ---------- 添加商品 ---------- */
 const currentProduct = ref(null)
-// 会员优惠金额（零售价合计 − 会员价成交合计）
-const memberDiscount = computed(() => +(store.retailAmount - store.totalAmount).toFixed(2))
 
 // 添加商品：按件直接入单，称重进入称重流程
 const addProduct = (p) => {

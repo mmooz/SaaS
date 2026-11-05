@@ -80,6 +80,14 @@ export function fetchOrderByNo(orderNo) {
 }
 
 /**
+ * 拉取当前生效的促销规则（收银端规则引擎使用）
+ * @returns {Promise<Array<object>>} 生效促销列表
+ */
+export function fetchActivePromotions() {
+  return request('/api/promotions/active')
+}
+
+/**
  * 按手机号查询会员（收银端会员识别）
  * @param {string} mobile 会员手机号
  * @returns {Promise<object>} 会员信息
