@@ -13,8 +13,8 @@
                 placeholder="搜索手机号 / 姓名"
                 clearable
                 class="search-input"
-                @keyup.enter="memberPage = 1"
-                @clear="memberPage = 1"
+                @keyup.enter="handleMemberSearch"
+                @clear="handleMemberSearch"
               >
                 <template #prefix>
                   <el-icon><Search /></el-icon>
@@ -28,26 +28,28 @@
             </div>
 
             <!-- 会员列表 -->
-            <el-table v-loading="memberLoading" :data="pagedMembers" stripe>
-              <el-table-column prop="phone" label="手机号" width="130">
-                <template #default="{ row }"><span class="num">{{ row.phone }}</span></template>
+            <el-table v-loading="memberLoading" :data="members" stripe>
+              <el-table-column prop="mobile" label="手机号" width="130">
+                <template #default="{ row }"><span class="num">{{ row.mobile }}</span></template>
               </el-table-column>
               <el-table-column prop="name" label="姓名" width="110" />
               <el-table-column label="等级" width="90" align="center">
                 <template #default="{ row }">
-                  <el-tag size="small" :type="levelTagType(row.level)" effect="light">{{ row.level }}</el-tag>
+                  <el-tag size="small" :type="levelTagType(row.level)" effect="light">{{ levelText(row.level) }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="points" label="积分" width="90" align="right">
                 <template #default="{ row }"><span class="num">{{ row.points }}</span></template>
               </el-table-column>
               <el-table-column label="储值余额(元)" width="120" align="right">
-                <template #default="{ row }"><span class="num balance">¥{{ row.balance.toFixed(2) }}</span></template>
+                <template #default="{ row }"><span class="num balance">¥{{ Number(row.balance).toFixed(2) }}</span></template>
               </el-table-column>
               <el-table-column label="累计消费(元)" width="120" align="right">
-                <template #default="{ row }"><span class="num">¥{{ row.totalSpent.toFixed(2) }}</span></template>
+                <template #default="{ row }"><span class="num">¥{{ Number(row.total_spent).toFixed(2) }}</span></template>
               </el-table-column>
-              <el-table-column prop="regDate" label="注册时间" width="110" />
+              <el-table-column label="注册时间" width="110">
+                <template #default="{ row }"><span class="num">{{ fmtTime(row.created_at, 10) }}</span></template>
+              </el-table-column>
               <el-table-column label="操作" width="180" align="center" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" size="small" @click="openEditMember(row)">编辑</el-button>
@@ -60,7 +62,7 @@
               </template>
             </el-table>
 
-            <!-- 分页（模拟总数） -->
+            <!-- 分页（后端总数） -->
             <div class="pagination-wrap">
               <el-pagination
                 v-model:current-page="memberPage"
@@ -69,6 +71,8 @@
                 :page-sizes="[10, 20, 50]"
                 layout="total, sizes, prev, pager, next, jumper"
                 background
+                @current-change="handleMemberPageChange"
+                @size-change="handleMemberSearch"
               />
             </div>
           </div>
@@ -89,13 +93,13 @@
                     style="width: 100%"
                     @change="onSelectRechargeMember"
                   >
-                    <el-option v-for="m in members" :key="m.id" :label="`${m.name}（${m.phone}）`" :value="m.id" />
+                    <el-option v-for="m in memberOptions" :key="m.id" :label="`${m.name}（${m.mobile}）`" :value="m.id" />
                   </el-select>
                 </el-form-item>
-                <div v-if="rechargeMember" class="member-info">
-                  <span class="mi-name">{{ rechargeMember.name }}</span>
-                  <el-tag size="small" :type="levelTagType(rechargeMember.level)" effect="light">{{ rechargeMember.level }}</el-tag>
-                  <span class="mi-balance">当前余额 <b class="num">¥{{ rechargeMember.balance.toFixed(2) }}</b></span>
+                <div v-if="currentRechargeMember" class="member-info">
+                  <span class="mi-name">{{ currentRechargeMember.name }}</span>
+                  <el-tag size="small" :type="levelTagType(currentRechargeMember.level)" effect="light">{{ levelText(currentRechargeMember.level) }}</el-tag>
+                  <span class="mi-balance">当前余额 <b class="num">¥{{ Number(currentRechargeMember.balance).toFixed(2) }}</b></span>
                 </div>
                 <el-form-item label="充值金额">
                   <el-input-number v-model="rechargeAmount" :min="0" :max="9999" :precision="2" :step="100" style="width: 100%" />
@@ -112,7 +116,7 @@
                   </el-radio-group>
                 </el-form-item>
                 <el-form-item>
-                  <el-button type="primary" :disabled="!rechargeMember || rechargeAmount <= 0" @click="submitRecharge">
+                  <el-button type="primary" :loading="rechargeLoading" :disabled="!currentRechargeMember || rechargeAmount <= 0" @click="submitRecharge">
                     <el-icon><Wallet /></el-icon>确认充值
                   </el-button>
                 </el-form-item>
@@ -129,14 +133,13 @@
                 <el-table-column label="会员" width="120">
                   <template #default="{ row }">{{ row.name }}（{{ row.phone }}）</template>
                 </el-table-column>
-                <el-table-column label="充值(元)" width="90" align="right">
+                <el-table-column label="到账(元)" width="90" align="right">
                   <template #default="{ row }"><span class="num">+{{ row.amount.toFixed(2) }}</span></template>
                 </el-table-column>
-                <el-table-column label="赠送(元)" width="90" align="right">
-                  <template #default="{ row }"><span class="num gift">+{{ row.gift.toFixed(2) }}</span></template>
+                <el-table-column label="赠送积分" width="90" align="right">
+                  <template #default="{ row }"><span class="num gift">+{{ row.bonusPoints }}</span></template>
                 </el-table-column>
-                <el-table-column prop="method" label="支付方式" width="90" align="center" />
-                <el-table-column prop="operator" label="操作人" width="90" align="center" />
+                <el-table-column prop="method" label="操作来源" width="110" align="center" />
                 <template #empty>
                   <el-empty description="暂无充值记录" />
                 </template>
@@ -149,23 +152,23 @@
         <el-tab-pane label="积分记录" name="points">
           <div class="pane-body">
             <div class="toolbar">
-              <el-select v-model="pointTypeFilter" placeholder="全部类型" clearable class="filter-select" @change="pointPage = 1">
-                <el-option v-for="t in pointTypes" :key="t" :label="t" :value="t" />
+              <el-select v-model="pointTypeFilter" placeholder="全部类型" clearable class="filter-select" @change="loadPointRecords">
+                <el-option v-for="t in pointTypes" :key="t" :label="txTypeText(t)" :value="t" />
               </el-select>
               <span class="point-summary">
                 筛选结果共 <b class="num">{{ filteredPointRecords.length }}</b> 条变动
               </span>
             </div>
-            <el-table :data="filteredPointRecords" stripe>
+            <el-table v-loading="pointLoading" :data="filteredPointRecords" stripe>
               <el-table-column prop="time" label="时间" width="150">
                 <template #default="{ row }"><span class="num">{{ row.time }}</span></template>
               </el-table-column>
               <el-table-column label="会员" width="140">
-                <template #default="{ row }">{{ row.name }}（{{ row.phone }}）</template>
+                <template #default="{ row }">{{ row.name }}（{{ row.mobile }}）</template>
               </el-table-column>
               <el-table-column label="类型" width="110" align="center">
                 <template #default="{ row }">
-                  <el-tag size="small" :type="pointTypeTag(row.type)" effect="light">{{ row.type }}</el-tag>
+                  <el-tag size="small" :type="pointTypeTag(row.type)" effect="light">{{ row.typeText }}</el-tag>
                 </template>
               </el-table-column>
               <el-table-column prop="reason" label="原因" min-width="160" />
@@ -187,33 +190,33 @@
         <el-tab-pane label="会员分析" name="analysis">
           <div class="pane-body">
             <!-- 统计卡片 -->
-            <div class="stat-grid">
+            <div class="stat-grid" v-loading="statsLoading">
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--brand)"><el-icon :size="20"><User /></el-icon></div>
                 <div>
                   <div class="stat-label">会员总数</div>
-                  <div class="stat-value num">1,286</div>
+                  <div class="stat-value num">{{ memberStats.total }}</div>
                 </div>
               </div>
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--info)"><el-icon :size="20"><UserFilled /></el-icon></div>
                 <div>
                   <div class="stat-label">今日新增</div>
-                  <div class="stat-value num">12</div>
+                  <div class="stat-value num">{{ memberStats.new_today }}</div>
                 </div>
               </div>
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--accent)"><el-icon :size="20"><Wallet /></el-icon></div>
                 <div>
                   <div class="stat-label">储值余额总额</div>
-                  <div class="stat-value num">¥86,420.00</div>
+                  <div class="stat-value num">¥{{ Number(memberStats.balance_total).toFixed(2) }}</div>
                 </div>
               </div>
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--success)"><el-icon :size="20"><TrendCharts /></el-icon></div>
                 <div>
                   <div class="stat-label">本月储值收入</div>
-                  <div class="stat-value num">¥12,580.00</div>
+                  <div class="stat-value num">¥{{ Number(memberStats.recharge_this_month).toFixed(2) }}</div>
                 </div>
               </div>
             </div>
@@ -231,21 +234,21 @@
                   </template>
                 </el-table-column>
                 <el-table-column label="会员" min-width="150">
-                  <template #default="{ row }">{{ row.name }}（{{ row.phone }}）</template>
+                  <template #default="{ row }">{{ row.name }}（{{ row.mobile }}）</template>
                 </el-table-column>
                 <el-table-column label="等级" width="90" align="center">
                   <template #default="{ row }">
-                    <el-tag size="small" :type="levelTagType(row.level)" effect="light">{{ row.level }}</el-tag>
+                    <el-tag size="small" :type="levelTagType(row.level)" effect="light">{{ levelText(row.level) }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column label="累计消费(元)" width="130" align="right">
-                  <template #default="{ row }"><span class="num">{{ row.totalSpent.toFixed(2) }}</span></template>
+                  <template #default="{ row }"><span class="num">{{ Number(row.total_spent).toFixed(2) }}</span></template>
                 </el-table-column>
                 <el-table-column label="本月消费(元)" width="130" align="right">
-                  <template #default="{ row }"><span class="num">{{ row.monthSpent.toFixed(2) }}</span></template>
+                  <template #default="{ row }"><span class="num">{{ Number(row.month_spent).toFixed(2) }}</span></template>
                 </el-table-column>
                 <el-table-column label="消费次数" width="100" align="right">
-                  <template #default="{ row }"><span class="num">{{ row.orderCount }}</span></template>
+                  <template #default="{ row }"><span class="num">{{ row.order_count }}</span></template>
                 </el-table-column>
               </el-table>
             </div>
@@ -257,30 +260,18 @@
     <!-- 新增 / 编辑会员弹窗 -->
     <el-dialog v-model="memberFormVisible" :title="memberForm.id ? '编辑会员' : '新增会员'" width="480px">
       <el-form ref="memberFormRef" :model="memberForm" :rules="memberRules" label-width="90px">
-        <el-form-item label="手机号" prop="phone">
-          <el-input v-model="memberForm.phone" placeholder="请输入手机号" maxlength="11" />
+        <el-form-item label="手机号" prop="mobile">
+          <el-input v-model="memberForm.mobile" :disabled="memberForm.id > 0" placeholder="请输入手机号" maxlength="11" />
         </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="memberForm.name" placeholder="请输入姓名" />
         </el-form-item>
         <el-form-item label="会员等级" prop="level">
           <el-select v-model="memberForm.level" style="width: 100%">
-            <el-option label="普通" value="普通" />
-            <el-option label="银卡" value="银卡" />
-            <el-option label="金卡" value="金卡" />
+            <el-option label="普通" value="normal" />
+            <el-option label="银卡" value="silver" />
+            <el-option label="金卡" value="gold" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="性别" prop="gender">
-          <el-radio-group v-model="memberForm.gender">
-            <el-radio value="男">男</el-radio>
-            <el-radio value="女">女</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="生日" prop="birthday">
-          <el-date-picker v-model="memberForm.birthday" type="date" placeholder="选择生日" value-format="YYYY-MM-DD" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="备注" prop="remark">
-          <el-input v-model="memberForm.remark" type="textarea" :rows="2" placeholder="选填" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -293,14 +284,14 @@
     <el-dialog v-model="detailVisible" title="会员明细" width="520px">
       <template v-if="detailMember">
         <div class="detail-summary">
-          <div class="ds-name">{{ detailMember.name }}<el-tag size="small" :type="levelTagType(detailMember.level)" effect="light" class="ds-tag">{{ detailMember.level }}</el-tag></div>
-          <div class="ds-meta num">{{ detailMember.phone }} · 积分 {{ detailMember.points }} · 余额 ¥{{ detailMember.balance.toFixed(2) }} · 累计消费 ¥{{ detailMember.totalSpent.toFixed(2) }}</div>
+          <div class="ds-name">{{ detailMember.name }}<el-tag size="small" :type="levelTagType(detailMember.level)" effect="light" class="ds-tag">{{ levelText(detailMember.level) }}</el-tag></div>
+          <div class="ds-meta num">{{ detailMember.mobile }} · 积分 {{ detailMember.points }} · 余额 ¥{{ Number(detailMember.balance).toFixed(2) }} · 累计消费 ¥{{ Number(detailMember.total_spent).toFixed(2) }}</div>
         </div>
-        <el-table :data="detailMember.records" size="small">
+        <el-table v-loading="detailLoading" :data="detailMember.records" size="small">
           <el-table-column prop="time" label="时间" width="150">
             <template #default="{ row }"><span class="num">{{ row.time }}</span></template>
           </el-table-column>
-          <el-table-column prop="content" label="内容" min-width="200" />
+          <el-table-column prop="reason" label="内容" min-width="200" />
           <el-table-column label="变动" width="100" align="right">
             <template #default="{ row }">
               <span class="num" :class="row.change >= 0 ? 'change-plus' : 'change-minus'">
@@ -315,80 +306,127 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Plus, Wallet, User, UserFilled, TrendCharts } from '@element-plus/icons-vue'
+import {
+  createMember,
+  fetchMemberStats,
+  fetchMemberTransactions,
+  fetchMembers,
+  rechargeMember,
+  updateMember,
+} from '../api'
 
-// ---- 状态 ----
+// 当前页签：profile / recharge / points / analysis
 const activeTab = ref('profile')
 
-// 会员等级对应标签颜色
+// 会员等级：后端值 → 中文文案
+const LEVEL_TO_TEXT = { normal: '普通', silver: '银卡', gold: '金卡' }
+
+/**
+ * 会员等级转中文
+ * @param {string} level 后端等级值
+ * @returns {string} 中文等级
+ */
+const levelText = (level) => LEVEL_TO_TEXT[level] || level || '普通'
+
+/**
+ * 会员等级对应标签颜色
+ * @param {string} level 后端等级值
+ * @returns {string} el-tag 类型
+ */
 const levelTagType = (level) => {
-  if (level === '金卡') return 'danger'
-  if (level === '银卡') return 'warning'
+  if (level === 'gold') return 'danger'
+  if (level === 'silver') return 'warning'
   return 'info'
 }
 
-// ---- 模拟数据：会员列表 ----
-const members = ref([
-  { id: 1, phone: '13800138001', name: '张伟', level: '金卡', points: 2680, balance: 860.5, totalSpent: 4280.6, regDate: '2025-06-12', gender: '男',
-    records: [
-      { time: '2026-11-04 18:32', content: '消费积分 +12', change: 12 },
-      { time: '2026-11-02 09:15', content: '积分兑换抵扣 ¥5', change: -500 },
-      { time: '2026-10-28 19:40', content: '储值充值得积分', change: 100 },
-    ] },
-  { id: 2, phone: '13900139002', name: '李娜', level: '银卡', points: 1280, balance: 320.0, totalSpent: 1980.2, regDate: '2025-08-03', gender: '女',
-    records: [
-      { time: '2026-11-03 17:20', content: '消费积分 +8', change: 8 },
-      { time: '2026-10-30 11:05', content: '消费抵扣积分', change: -200 },
-    ] },
-  { id: 3, phone: '13700137003', name: '王强', level: '普通', points: 360, balance: 0, totalSpent: 620.0, regDate: '2026-01-15', gender: '男', records: [] },
-  { id: 4, phone: '13600136004', name: '赵敏', level: '金卡', points: 3560, balance: 1250.0, totalSpent: 5620.8, regDate: '2025-05-20', gender: '女',
-    records: [
-      { time: '2026-11-04 20:10', content: '消费积分 +20', change: 20 },
-      { time: '2026-11-01 10:00', content: '储值充值 1000 送 120 得积分', change: 120 },
-    ] },
-  { id: 5, phone: '13500135005', name: '孙丽', level: '银卡', points: 980, balance: 200.0, totalSpent: 1520.5, regDate: '2025-10-08', gender: '女', records: [] },
-  { id: 6, phone: '13400134006', name: '周杰', level: '普通', points: 180, balance: 0, totalSpent: 320.0, regDate: '2026-03-22', gender: '男', records: [] },
-  { id: 7, phone: '13300133007', name: '吴芳', level: '银卡', points: 1450, balance: 480.0, totalSpent: 2350.0, regDate: '2025-09-01', gender: '女', records: [] },
-  { id: 8, phone: '13200132008', name: '郑浩', level: '普通', points: 90, balance: 0, totalSpent: 210.0, regDate: '2026-06-30', gender: '男', records: [] },
-  { id: 9, phone: '13100131009', name: '陈静', level: '金卡', points: 4120, balance: 2100.0, totalSpent: 8890.0, regDate: '2025-04-18', gender: '女',
-    records: [
-      { time: '2026-11-05 08:40', content: '消费积分 +30', change: 30 },
-      { time: '2026-11-03 15:25', content: '积分兑换赠品', change: -800 },
-    ] },
-  { id: 10, phone: '13000130010', name: '刘洋', level: '普通', points: 240, balance: 60.0, totalSpent: 480.0, regDate: '2026-07-12', gender: '男', records: [] },
-])
+/**
+ * 时间格式化（ISO → 指定长度字符串）
+ * @param {string|null} value 时间
+ * @param {number} len 截取长度：日期 10 / 精确到分 16
+ * @returns {string} 展示时间
+ */
+function fmtTime(value, len = 16) {
+  if (!value) return ''
+  return String(value).replace('T', ' ').slice(0, len)
+}
 
-// 会员总数（模拟：含未展示数据）
-const memberTotal = ref(1286)
+/* ---------------- 会员档案 ---------------- */
 
-// ---- 会员档案页 ----
+// 搜索关键字
 const memberSearch = ref('')
+// 列表加载态
 const memberLoading = ref(false)
+// 当前页码
 const memberPage = ref(1)
+// 每页条数
 const memberPageSize = ref(10)
+// 会员总数（后端返回）
+const memberTotal = ref(0)
+// 当前页会员列表（后端数据）
+const members = ref([])
+// 全量会员（供充值下拉使用）
+const memberOptions = ref([])
 
-// 按手机号 / 姓名过滤会员
-const filteredMembers = computed(() => {
-  const kw = memberSearch.value.trim()
-  if (!kw) return members.value
-  return members.value.filter((m) => m.phone.includes(kw) || m.name.includes(kw))
-})
+/**
+ * 加载会员分页数据
+ * @returns {Promise<void>}
+ */
+async function loadMembers() {
+  memberLoading.value = true
+  try {
+    const data = await fetchMembers({
+      keyword: memberSearch.value,
+      page: memberPage.value,
+      pageSize: memberPageSize.value,
+    })
+    members.value = data.items || []
+    memberTotal.value = data.total || 0
+  } catch (err) {
+    ElMessage.error(`会员加载失败：${err.message}`)
+  } finally {
+    memberLoading.value = false
+  }
+}
 
-// 当前分页会员
-const pagedMembers = computed(() => {
-  const start = (memberPage.value - 1) * memberPageSize.value
-  return filteredMembers.value.slice(start, start + memberPageSize.value)
-})
+/**
+ * 加载全量会员（供充值下拉使用）
+ * @returns {Promise<void>}
+ */
+async function loadMemberOptions() {
+  try {
+    const data = await fetchMembers({ page: 1, pageSize: 200 })
+    memberOptions.value = data.items || []
+  } catch (err) {
+    ElMessage.error(`会员选项加载失败：${err.message}`)
+  }
+}
 
-// 新增 / 编辑会员
+/**
+ * 搜索会员：重置到第一页后加载
+ */
+function handleMemberSearch() {
+  memberPage.value = 1
+  loadMembers()
+}
+
+/**
+ * 翻页 / 变更每页条数后重新加载
+ */
+function handleMemberPageChange() {
+  loadMembers()
+}
+
+// 新增 / 编辑会员弹窗状态
 const memberFormVisible = ref(false)
 const memberFormRef = ref(null)
-// 会员表单模型
-const memberForm = ref({ id: 0, phone: '', name: '', level: '普通', gender: '男', birthday: '', remark: '' })
+// 会员表单模型（字段与后端保持一致）
+const memberForm = ref({ id: 0, mobile: '', name: '', level: 'normal' })
+// 表单校验规则
 const memberRules = {
-  phone: [
+  mobile: [
     { required: true, message: '请输入手机号', trigger: 'blur' },
     { pattern: /^1\d{10}$/, message: '手机号格式不正确', trigger: 'blur' },
   ],
@@ -396,71 +434,113 @@ const memberRules = {
   level: [{ required: true, message: '请选择会员等级', trigger: 'change' }],
 }
 
-// 打开新增会员弹窗
+/**
+ * 打开新增会员弹窗
+ */
 const openAddMember = () => {
-  memberForm.value = { id: 0, phone: '', name: '', level: '普通', gender: '男', birthday: '', remark: '' }
+  memberForm.value = { id: 0, mobile: '', name: '', level: 'normal' }
   memberFormVisible.value = true
 }
 
-// 打开编辑会员弹窗
+/**
+ * 打开编辑会员弹窗（手机号不可修改）
+ * @param {object} row 会员行
+ */
 const openEditMember = (row) => {
-  memberForm.value = { ...row }
+  memberForm.value = { id: row.id, mobile: row.mobile, name: row.name, level: row.level || 'normal' }
   memberFormVisible.value = true
 }
 
-// 提交会员表单：模拟保存
+/**
+ * 提交会员表单：新增走 POST，编辑走 PATCH
+ */
 const submitMember = () => {
-  memberFormRef.value.validate((valid) => {
+  memberFormRef.value.validate(async (valid) => {
     if (!valid) return
-    if (memberForm.value.id === 0) {
-      members.value.unshift({
-        ...memberForm.value,
-        id: Date.now(),
-        points: 0,
-        balance: 0,
-        totalSpent: 0,
-        regDate: '2026-11-05',
-        records: [],
-      })
-      memberTotal.value += 1
-      ElMessage.success('会员已新增')
-    } else {
-      const idx = members.value.findIndex((m) => m.id === memberForm.value.id)
-      if (idx > -1) members.value[idx] = { ...members.value[idx], ...memberForm.value }
-      ElMessage.success('会员信息已更新')
+    try {
+      if (memberForm.value.id === 0) {
+        await createMember({
+          mobile: memberForm.value.mobile,
+          name: memberForm.value.name,
+          level: memberForm.value.level,
+        })
+        ElMessage.success('会员已新增')
+      } else {
+        await updateMember(memberForm.value.id, {
+          name: memberForm.value.name,
+          level: memberForm.value.level,
+        })
+        ElMessage.success('会员信息已更新')
+      }
+      memberFormVisible.value = false
+      loadMembers()
+      loadMemberOptions()
+    } catch (err) {
+      ElMessage.error(`保存失败：${err.message}`)
     }
-    memberFormVisible.value = false
   })
 }
 
-// 跳转到储值充值页签并预选该会员
+/**
+ * 跳转到储值充值页签并预选该会员
+ * @param {object} row 会员行
+ */
 const goRecharge = (row) => {
   rechargeMemberId.value = row.id
   activeTab.value = 'recharge'
 }
 
-// 查看会员明细
+// 明细弹窗状态
 const detailVisible = ref(false)
 const detailMember = ref(null)
-const openDetail = (row) => {
-  detailMember.value = row
+// 明细加载态
+const detailLoading = ref(false)
+
+/**
+ * 查看会员明细（加载最近 10 条会员流水）
+ * @param {object} row 会员行
+ * @returns {Promise<void>}
+ */
+async function openDetail(row) {
+  detailMember.value = { ...row, records: [] }
   detailVisible.value = true
+  detailLoading.value = true
+  try {
+    const data = await fetchMemberTransactions({ memberId: row.id, pageSize: 10 })
+    detailMember.value.records = (data.items || []).map(toRecordRow)
+  } catch (err) {
+    ElMessage.error(`明细加载失败：${err.message}`)
+  } finally {
+    detailLoading.value = false
+  }
 }
 
-// ---- 储值充值页 ----
+/* ---------------- 储值充值 ---------------- */
+
+// 选中会员 ID
 const rechargeMemberId = ref(null)
+// 充值金额
 const rechargeAmount = ref(0)
+// 支付方式（后台仅作记录展示）
 const payMethod = ref('微信')
+// 充值记录列表
+const rechargeRecords = ref([])
+// 充值提交中
+const rechargeLoading = ref(false)
 
-// 当前选中的充值会员对象
-const rechargeMember = computed(() => members.value.find((m) => m.id === rechargeMemberId.value) || null)
+// 当前选中的充值会员
+const currentRechargeMember = computed(
+  () => memberOptions.value.find((m) => m.id === rechargeMemberId.value) || null,
+)
 
-// 充值会员切换：重置金额
+/**
+ * 切换充值会员时重置金额
+ */
 const onSelectRechargeMember = () => {
   rechargeAmount.value = 0
 }
 
-// 赠送金额：按充值金额梯度计算
+// 赠送金额：按充值金额梯度计算（满 200 送 15 / 满 500 送 50 / 满 1000 送 120）
 const giftAmount = computed(() => {
   const a = rechargeAmount.value
   if (a <= 0) return 0
@@ -470,75 +550,162 @@ const giftAmount = computed(() => {
   return 0
 })
 
-// 模拟充值记录
-const rechargeRecords = ref([
-  { time: '2026-11-04 19:20', name: '赵敏', phone: '13600136004', amount: 1000, gift: 120, method: '微信', operator: '店长 王' },
-  { time: '2026-11-02 10:05', name: '陈静', phone: '13100131009', amount: 500, gift: 50, method: '支付宝', operator: '收银 李' },
-  { time: '2026-10-28 16:40', name: '张伟', phone: '13800138001', amount: 200, gift: 15, method: '现金', operator: '店长 王' },
-  { time: '2026-10-25 09:30', name: '李娜', phone: '13900139002', amount: 300, gift: 15, method: '微信', operator: '收银 李' },
-])
-
-// 确认充值：写入充值记录并更新会员余额
-const submitRecharge = () => {
-  const m = rechargeMember.value
-  m.balance += rechargeAmount.value + giftAmount.value
-  rechargeRecords.value.unshift({
-    time: '2026-11-05 09:00',
-    name: m.name,
-    phone: m.phone,
-    amount: rechargeAmount.value,
-    gift: giftAmount.value,
-    method: payMethod.value,
-    operator: '店长 王',
-  })
-  ElMessage.success(`充值成功：到账 ¥${(rechargeAmount.value + giftAmount.value).toFixed(2)}（含赠送 ¥${giftAmount.value.toFixed(2)}）`)
-  rechargeAmount.value = 0
+/**
+ * 加载充值记录（会员流水中 type=recharge）
+ * @returns {Promise<void>}
+ */
+async function loadRechargeRecords() {
+  try {
+    const data = await fetchMemberTransactions({ type: 'recharge', pageSize: 20 })
+    rechargeRecords.value = (data.items || []).map((t) => ({
+      id: t.id,
+      time: fmtTime(t.created_at),
+      name: t.member_name || '—',
+      phone: t.mobile || '—',
+      amount: Number(t.amount || 0),
+      bonusPoints: Number(t.points || 0),
+      method: t.operator_id ? `操作员 ${t.operator_id}` : '后台充值',
+    }))
+  } catch (err) {
+    ElMessage.error(`充值记录加载失败：${err.message}`)
+  }
 }
 
-// ---- 积分记录页 ----
-const pointTypes = ['消费得', '充值得', '抵扣', '兑换', '失效']
-const pointTypeFilter = ref('')
+/**
+ * 确认充值：调用后端充值接口（含赠送金额）
+ * @returns {Promise<void>}
+ */
+async function submitRecharge() {
+  const m = currentRechargeMember.value
+  if (!m || rechargeAmount.value <= 0) return
+  rechargeLoading.value = true
+  try {
+    await rechargeMember(m.id, { amount: rechargeAmount.value, giftAmount: giftAmount.value })
+    ElMessage.success(
+      `充值成功：到账 ¥${(rechargeAmount.value + giftAmount.value).toFixed(2)}（含赠送 ¥${giftAmount.value.toFixed(2)}）`,
+    )
+    rechargeAmount.value = 0
+    loadMemberOptions()
+    loadMembers()
+    loadRechargeRecords()
+    loadPointRecords()
+    loadMemberStats()
+  } catch (err) {
+    ElMessage.error(`充值失败：${err.message}`)
+  } finally {
+    rechargeLoading.value = false
+  }
+}
 
-// 积分变动类型对应标签颜色
-const pointTypeTag = (t) => {
-  if (t === '消费得') return 'success'
-  if (t === '充值得') return 'primary'
-  if (t === '抵扣' || t === '失效') return 'info'
+/* ---------------- 积分记录 ---------------- */
+
+// 流水类型：后端值 → 中文文案
+const TYPE_TO_TEXT = { recharge: '充值', consume: '消费', points: '积分调整', refund: '退款' }
+// 积分筛选类型（后端值）
+const pointTypes = Object.keys(TYPE_TO_TEXT)
+// 类型筛选值
+const pointTypeFilter = ref('')
+// 积分流水列表
+const pointRecords = ref([])
+// 积分流水加载态
+const pointLoading = ref(false)
+
+/**
+ * 流水类型转中文
+ * @param {string} type 后端类型
+ * @returns {string} 中文类型
+ */
+const txTypeText = (type) => TYPE_TO_TEXT[type] || type
+
+/**
+ * 流水类型对应标签颜色
+ * @param {string} type 后端类型
+ * @returns {string} el-tag 类型
+ */
+const pointTypeTag = (type) => {
+  if (type === 'consume') return 'success'
+  if (type === 'recharge') return 'primary'
   return 'warning'
 }
 
-// 模拟积分变动流水
-const pointRecords = ref([
-  { time: '2026-11-05 08:40', name: '陈静', phone: '13100131009', type: '消费得', reason: '消费 ¥68.00，按 1 元 1 积分', change: 30 },
-  { time: '2026-11-04 20:10', name: '赵敏', phone: '13600136004', type: '消费得', reason: '消费 ¥45.20', change: 20 },
-  { time: '2026-11-04 18:32', name: '张伟', phone: '13800138001', type: '消费得', reason: '消费 ¥28.60', change: 12 },
-  { time: '2026-11-03 15:25', name: '陈静', phone: '13100131009', type: '兑换', reason: '积分兑换：5 元优惠券', change: -800 },
-  { time: '2026-11-02 09:15', name: '张伟', phone: '13800138001', type: '抵扣', reason: '积分抵扣 ¥5.00', change: -500 },
-  { time: '2026-11-01 10:00', name: '赵敏', phone: '13600136004', type: '充值得', reason: '储值充值 ¥1000 赠送 120', change: 120 },
-  { time: '2026-10-30 11:05', name: '李娜', phone: '13900139002', type: '抵扣', reason: '积分抵扣 ¥2.00', change: -200 },
-  { time: '2026-10-28 16:40', name: '张伟', phone: '13800138001', type: '充值得', reason: '储值充值 ¥200', change: 20 },
-  { time: '2026-10-25 09:30', name: '李娜', phone: '13900139002', type: '消费得', reason: '消费 ¥36.80', change: 15 },
-  { time: '2026-10-20 14:00', name: '孙丽', phone: '13500135005', type: '失效', reason: '年度积分过期', change: -50 },
-])
+/**
+ * 会员流水转列表行（积分记录与明细弹窗共用）
+ * @param {object} t 后端流水
+ * @returns {object} 展示行
+ */
+function toRecordRow(t) {
+  const points = Number(t.points || 0)
+  const amount = Number(t.amount || 0)
+  return {
+    id: t.id,
+    time: fmtTime(t.created_at),
+    name: t.member_name || '—',
+    mobile: t.mobile || '—',
+    type: t.type,
+    typeText: txTypeText(t.type),
+    reason: `金额 ¥${amount.toFixed(2)} · 积分 ${points >= 0 ? '+' : ''}${points}`,
+    change: points,
+  }
+}
 
-// 按类型筛选积分流水
-const filteredPointRecords = computed(() => {
-  if (!pointTypeFilter.value) return pointRecords.value
-  return pointRecords.value.filter((r) => r.type === pointTypeFilter.value)
+/**
+ * 加载积分流水（仅保留积分变动不为 0 的记录）
+ * @returns {Promise<void>}
+ */
+async function loadPointRecords() {
+  pointLoading.value = true
+  try {
+    const data = await fetchMemberTransactions({ type: pointTypeFilter.value, pageSize: 100 })
+    pointRecords.value = (data.items || []).map(toRecordRow).filter((r) => r.change !== 0)
+  } catch (err) {
+    ElMessage.error(`积分流水加载失败：${err.message}`)
+  } finally {
+    pointLoading.value = false
+  }
+}
+
+// 积分记录展示列表（类型筛选已由后端处理）
+const filteredPointRecords = computed(() => pointRecords.value)
+
+/* ---------------- 会员分析 ---------------- */
+
+// 会员统计概览
+const memberStats = ref({
+  total: 0,
+  new_today: 0,
+  balance_total: 0,
+  recharge_this_month: 0,
+  top: [],
 })
+// 统计加载态
+const statsLoading = ref(false)
 
-// ---- 会员分析页 ----
-// 模拟消费排行（前 10）
-const topMembers = ref([
-  { rank: 1, name: '陈静', phone: '13100131009', level: '金卡', totalSpent: 8890.0, monthSpent: 1268.5, orderCount: 86 },
-  { rank: 2, name: '赵敏', phone: '13600136004', level: '金卡', totalSpent: 5620.8, monthSpent: 986.2, orderCount: 64 },
-  { rank: 3, name: '张伟', phone: '13800138001', level: '金卡', totalSpent: 4280.6, monthSpent: 820.0, orderCount: 52 },
-  { rank: 4, name: '吴芳', phone: '13300133007', level: '银卡', totalSpent: 2350.0, monthSpent: 460.0, orderCount: 38 },
-  { rank: 5, name: '李娜', phone: '13900139002', level: '银卡', totalSpent: 1980.2, monthSpent: 320.0, orderCount: 29 },
-  { rank: 6, name: '孙丽', phone: '13500135005', level: '银卡', totalSpent: 1520.5, monthSpent: 280.5, orderCount: 24 },
-  { rank: 7, name: '郑浩', phone: '13200132008', level: '普通', totalSpent: 620.0, monthSpent: 120.0, orderCount: 11 },
-  { rank: 8, name: '王强', phone: '13700137003', level: '普通', totalSpent: 320.0, monthSpent: 0, orderCount: 8 },
-])
+// 消费排行（补充名次）
+const topMembers = computed(() => (memberStats.value.top || []).map((m, i) => ({ ...m, rank: i + 1 })))
+
+/**
+ * 加载会员统计与消费排行
+ * @returns {Promise<void>}
+ */
+async function loadMemberStats() {
+  statsLoading.value = true
+  try {
+    memberStats.value = await fetchMemberStats()
+  } catch (err) {
+    ElMessage.error(`会员统计加载失败：${err.message}`)
+  } finally {
+    statsLoading.value = false
+  }
+}
+
+// 页面挂载时加载各页签数据
+onMounted(() => {
+  loadMembers()
+  loadMemberOptions()
+  loadRechargeRecords()
+  loadPointRecords()
+  loadMemberStats()
+})
 </script>
 
 <style scoped>
