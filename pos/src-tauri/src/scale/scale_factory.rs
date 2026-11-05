@@ -18,7 +18,7 @@ impl ScaleFactory {
         connection: &ScaleConnection,
         port_name: Option<&str>,
         baud_rate: Option<u32>,
-    ) -> Box<dyn WeighScale> {
+    ) -> Box<dyn WeighScale + Send> {
         match connection {
             ScaleConnection::Mock => Box::new(MockScale::new()),
             ScaleConnection::Serial => Box::new(SerialScale::new(SerialScaleConfig {

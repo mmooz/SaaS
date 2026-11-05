@@ -10,8 +10,8 @@ use crate::scale::{ScaleConnection, ScaleFactory, WeighScale};
 
 mod scale;
 
-/// 全局应用状态：持有当前电子秤实例
-struct ScaleState(Mutex<Box<dyn WeighScale>>);
+/// 全局应用状态：持有当前电子秤实例（跨线程共享，需 Send）
+struct ScaleState(Mutex<Box<dyn WeighScale + Send>>);
 
 /// 连接电子秤命令
 ///
