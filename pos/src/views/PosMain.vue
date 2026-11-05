@@ -674,7 +674,7 @@ const confirmPay = async () => {
       }
     }
   } else {
-    ElMessage.warning('网络异常，订单已本地保存，联网后自动上传')
+    ElMessage.warning(`离线收款成功 ¥${total.toFixed(2)} · 订单已存本机，联网后自动上传`)
   }
   // 自动打印：先小票（现金含实收/找零），再打印称重标签
   if (autoPrint.value && result.order) {
@@ -697,10 +697,20 @@ const confirmPay = async () => {
 // 结算快捷键 F9
 const settle = () => openPay('现金')
 
-// 重传离线订单
+// 重传离线数据（班次、订单、退款）
 const flushOffline = async () => {
-  await store.flushOfflineOrders()
-  if (!store.hasOfflineOrders) ElMessage.success('离线订单已全部上传')
+  const result = await store.flushOfflineOrders()
+  if (!store.hasOfflineOrders) {
+    ElMessage.success(result.uploaded ? `离线数据已全部上传（${result.uploaded} 单）` : '离线数据已全部上传')
+  } else {
+    ElMessage.warning('网络仍不可用，离线数据将在恢复联网后重试')
+  }
+}
+
+// 网络恢复时自动补传离线数据
+const handleOnline = async () => {
+  const result = await store.flushOfflineOrders()
+  if (result.uploaded > 0) ElMessage.success(`网络已恢复，自动补传 ${result.uploaded} 单`)
 }
 
 /* ---------- 挂单抽屉 ---------- */
@@ -770,14 +780,19 @@ onMounted(() => {
   updateClock()
   setInterval(updateClock, 1000)
   window.addEventListener('keydown', onKeydown)
+  window.addEventListener('online', handleOnline)
   // 连接电子秤（失败时使用模拟称重，不阻塞收银）
   connectScale()
-  // 启动时同步商品数据（失败不阻塞，使用本地缓存/演示数据）
+  // 启动时恢复离线队列并补传，再同步商品数据（失败不阻塞，使用本地缓存）
+  store.initOffline().then(() => {
+    if (navigator.onLine) store.flushOfflineOrders()
+  })
   store.syncProducts()
 })
 onBeforeUnmount(() => {
   stopWeighing()
   window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('online', handleOnline)
 })
 </script>
 

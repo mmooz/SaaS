@@ -54,6 +54,19 @@ async function request(path, options = {}) {
 }
 
 /**
+ * 判断请求失败是否属于网络不可用（用于触发离线兜底）
+ * @param {Error} err 请求异常
+ * @returns {boolean} 是否为网络异常
+ */
+export function isNetworkError(err) {
+  if (!err) return false
+  if (err instanceof TypeError) return true
+  return /failed to fetch|networkerror|network error|load failed|connection/i.test(
+    err.message || '',
+  )
+}
+
+/**
  * 账号密码登录
  * @param {string} username 登录账号（工号）
  * @param {string} password 登录密码
@@ -122,6 +135,8 @@ export function fetchOrders({ start, end, status, keyword, page = 1, pageSize = 
  * @param {string} data.refundType full=整单退款 item=单项退货
  * @param {number[]} [data.itemIds] 退货明细主键（单项退货必填）
  * @param {string} [data.reason] 退款原因
+ * @param {string} [data.refundNo] 退款单号（离线补传时保留）
+ * @param {string} [data.createdAt] 退款时间（离线补传时保留）
  * @param {number} [data.cashierId] 操作收银员 ID
  * @param {number} [data.authorizerId] 店长授权人 ID
  * @returns {Promise<object>} 退款单
@@ -130,6 +145,8 @@ export function refundOrder(orderNo, data) {
   return request(`/api/orders/${encodeURIComponent(orderNo)}/refund`, {
     method: 'POST',
     body: JSON.stringify({
+      refund_no: data.refundNo || null,
+      created_at: data.createdAt || null,
       refund_type: data.refundType,
       item_ids: data.itemIds || [],
       reason: data.reason || null,
@@ -228,6 +245,18 @@ export function fetchCurrentShift(cashierId) {
  */
 export function fetchShiftSummary(shiftId) {
   return request(`/api/shifts/${encodeURIComponent(shiftId)}/summary`)
+}
+
+/**
+ * 批量补传离线班次
+ * @param {Array<object>} shifts 班次快照列表
+ * @returns {Promise<{synced:number}>} 处理结果
+ */
+export function syncShifts(shifts) {
+  return request('/api/shifts/sync', {
+    method: 'POST',
+    body: JSON.stringify({ shifts }),
+  })
 }
 
 /**

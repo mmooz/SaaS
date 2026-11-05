@@ -2,7 +2,18 @@
 
 import { defineStore } from 'pinia'
 import { PromotionEngine } from '../services/PromotionEngine.js'
-import { clearAuthToken, consumeMember, fetchActivePromotions, fetchSyncData, setAuthToken, uploadOrder } from '../api.js'
+import {
+  clearAuthToken,
+  consumeMember,
+  fetchActivePromotions,
+  fetchSyncData,
+  refundOrder as apiRefundOrder,
+  setAuthToken,
+  syncShifts,
+  uploadOrder,
+} from '../api.js'
+import { offlineStore } from '../services/offline/OfflineStore.js'
+import { offlineSnowflake } from '../services/offline/Snowflake.js'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
@@ -48,8 +59,8 @@ export const usePosStore = defineStore('pos', {
     cart: loadLS(LS_CART, []),
     // 挂单列表
     hangOrders: loadLS(LS_HANG, []),
-    // 待上传订单队列
-    offlineOrders: loadLS(LS_OFFLINE, []),
+    // 待上传订单队列（启动后从本地离线数据库加载）
+    offlineOrders: [],
   }),
 
   getters: {
@@ -107,6 +118,26 @@ export const usePosStore = defineStore('pos', {
   },
 
   actions: {
+    /**
+     * 初始化离线数据库并恢复待上传队列（应用启动时调用）
+     * @returns {Promise<void>}
+     */
+    async initOffline() {
+      await offlineStore.init()
+      await this.reloadOfflineOrders()
+      // 旧版本 localStorage 队列已迁移，清理避免重复
+      localStorage.removeItem(LS_OFFLINE)
+    },
+
+    /**
+     * 从离线数据库刷新待上传订单镜像
+     * @returns {Promise<void>}
+     */
+    async reloadOfflineOrders() {
+      const rows = await offlineStore.listQueue('order')
+      this.offlineOrders = rows.map((row) => row.payload)
+    },
+
     /**
      * 同步拉取商品与分类（覆盖本地缓存）
      */
@@ -305,20 +336,24 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 结算：生成订单号并上传服务端；失败则进入离线队列
+     * 结算：生成订单（含雪花 ID）并先落本机，再上传服务端
      * 已识别会员时按会员价计价，储值支付成功后再扣减会员余额
      * @param {object} payload { payMethod, cashReceived, remark }
-     * @returns {Promise<{ok:boolean, orderNo:string, order:object, memberDeducted:boolean}>} 上传结果与本次订单数据
+     * @returns {Promise<{ok:boolean, offline:boolean, orderNo:string, order:object, memberDeducted:boolean}>} 上传结果与本次订单数据
      */
     async settle(payload) {
       const orderNo = this.buildOrderNo()
       // 请求中快照会员，避免结算过程中会员状态被清除
       const member = this.member
+      // 订单与明细统一使用离线生成的雪花 ID，补传后保持同一主键
+      const now = new Date().toISOString()
       // 逐项按零售价/会员价/促销价取最低计价
       const items = this.cart.map((i) => {
         const unitPrice = PromotionEngine.itemPrice(i, this.promotions, member)
         const amount = +((i.weighted ? unitPrice * i.weight : unitPrice * i.qty)).toFixed(2)
         return {
+          id: offlineSnowflake.nextId(),
+          created_at: now,
           product_id: i.productId,
           name: i.name,
           qty: i.qty,
@@ -337,7 +372,9 @@ export const usePosStore = defineStore('pos', {
       const discount = +(this.retailAmount - total).toFixed(2)
       const payDetails = JSON.stringify({ [payload.payMethod]: total })
       const order = {
+        id: offlineSnowflake.nextId(),
         order_no: orderNo,
+        created_at: now,
         cashier_id: this.cashier ? this.cashier.id : null,
         shift_id: this.shiftId,
         status: 'paid',
@@ -345,11 +382,16 @@ export const usePosStore = defineStore('pos', {
         discount_amount: discount > 0 ? discount : 0,
         pay_details: payDetails,
         member_id: member ? member.id : null,
+        member_mobile: member ? member.mobile : null,
+        refunded_amount: 0,
         items,
       }
+      // 先本地落库：即使断网也不丢单，且离线退款/交班可查询
+      await offlineStore.saveLocalOrder(order)
       try {
         await uploadOrder(order)
         this.clearCart()
+        await offlineStore.saveLocalOrder({ ...order, synced: true })
         // 储值支付：在线扣减会员余额并按金额累计积分
         let memberDeducted = false
         if (member && payload.payMethod === '储值') {
@@ -360,30 +402,82 @@ export const usePosStore = defineStore('pos', {
             memberDeducted = false // 扣款失败不阻塞结算，由后台对账处理
           }
         }
-        return { ok: true, orderNo, order, memberDeducted }
+        return { ok: true, offline: false, orderNo, order, memberDeducted }
       } catch (err) {
-        // 上传失败：进入离线队列，本地保留待重传
-        this.offlineOrders.push(order)
-        localStorage.setItem(LS_OFFLINE, JSON.stringify(this.offlineOrders))
+        // 上传失败：写入离线队列，联网后自动补传
+        await offlineStore.queueItem('order', orderNo, { ...order, offline: true }, now)
+        await offlineStore.saveLocalOrder({ ...order, offline: true })
+        this.offlineOrders.push({ ...order, offline: true })
         this.clearCart()
-        return { ok: false, orderNo, order, memberDeducted: false }
+        return { ok: false, offline: true, orderNo, order, memberDeducted: false }
       }
     },
 
     /**
-     * 重传离线订单队列
+     * 补传离线数据：依次上传班次 → 订单 → 退款（保证退款引用的订单已存在）
+     * @returns {Promise<{uploaded:number}>} 本次成功补传的订单数
      */
     async flushOfflineOrders() {
-      const pending = [...this.offlineOrders]
-      for (const order of pending) {
+      await this.initOffline()
+      // 1. 先补传班次，保证离线订单的班次归属有效
+      const pendingShifts = await offlineStore.listPendingShifts()
+      if (pendingShifts.length) {
         try {
-          await uploadOrder(order)
-          this.offlineOrders = this.offlineOrders.filter((o) => o.order_no !== order.order_no)
+          await syncShifts(
+            pendingShifts.map((shift) => ({
+              id: shift.shift_id,
+              cashier_id: shift.cashier_id,
+              store_id: 1,
+              start_at: shift.start_at,
+              end_at: shift.end_at,
+              base_cash: Number(shift.base_cash) || 0,
+              total_sales: Number(shift.total_sales) || 0,
+              order_count: Number(shift.order_count) || 0,
+              status: shift.status,
+            })),
+          )
+          for (const shift of pendingShifts) {
+            await offlineStore.markShiftSynced(shift.shift_id)
+          }
+        } catch {
+          // 网络不可用时保持未同步状态，下次启动再补传
+          await this.reloadOfflineOrders()
+          return { uploaded: 0 }
+        }
+      }
+      // 2. 按发生顺序补传订单
+      let uploaded = 0
+      const pendingOrders = await offlineStore.listQueue('order')
+      for (const item of pendingOrders) {
+        try {
+          await uploadOrder(item.payload)
+          await offlineStore.removeQueueItem('order', item.key)
+          await offlineStore.saveLocalOrder({ ...item.payload, offline: false, synced: true })
+          uploaded += 1
         } catch {
           break // 网络仍不可用，停止重传
         }
       }
-      localStorage.setItem(LS_OFFLINE, JSON.stringify(this.offlineOrders))
+      // 3. 最后补传退款
+      const pendingRefunds = await offlineStore.listQueue('refund')
+      for (const item of pendingRefunds) {
+        try {
+          await apiRefundOrder(item.payload.order_no, {
+            refundNo: item.payload.refund_no,
+            createdAt: item.payload.created_at,
+            refundType: item.payload.refund_type,
+            itemIds: item.payload.item_ids,
+            reason: item.payload.reason,
+            cashierId: item.payload.cashier_id,
+            authorizerId: item.payload.authorizer_id,
+          })
+          await offlineStore.removeQueueItem('refund', item.key)
+        } catch {
+          break
+        }
+      }
+      await this.reloadOfflineOrders()
+      return { uploaded }
     },
 
     /**
