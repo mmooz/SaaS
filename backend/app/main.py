@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import categories, products, sync
+from app.api import categories, orders, products, sync
 from app.config import settings
 from app.database import Base, engine
 from app import models  # 导入模型模块，确保建表时注册所有表
@@ -43,6 +43,7 @@ app.add_middleware(
 # 注册业务路由
 app.include_router(categories.router)
 app.include_router(products.router)
+app.include_router(orders.router)
 app.include_router(sync.router)
 
 

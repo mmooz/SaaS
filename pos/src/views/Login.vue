@@ -64,8 +64,10 @@ import { reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { User, Lock } from '@element-plus/icons-vue'
+import { usePosStore } from '../stores/posStore'
 
 const router = useRouter()
+const store = usePosStore()
 
 // 登录表单数据（演示：任意输入均可登录）
 const form = reactive({ username: '', password: '' })
@@ -77,18 +79,22 @@ const cashiers = [
   { id: 3, no: 'A1003', name: '收银员 小张', avatar: '🥬' },
 ]
 
-// 表单登录：校验工号与密码后跳转收银台
+// 表单登录：校验工号与密码后进入收银台
 const doLogin = () => {
   if (!form.username.trim() || !form.password.trim()) {
     ElMessage.warning('请输入工号与密码')
     return
   }
+  // 记录当前收银员（演示：用户名即身份，S6 对接真实登录接口）
+  store.setCashier({ id: 1, no: 'A1001', name: form.username, role: 'cashier' })
   ElMessage.success(`欢迎回来，${form.username}`)
   router.push('/')
 }
 
 // 快捷登录：点击头像一键进入收银台
 const quickLogin = (c) => {
+  // 记录当前收银员，结算时随订单上传
+  store.setCashier({ id: c.id, no: c.no, name: c.name, role: 'cashier' })
   ElMessage.success(`${c.name} 登录成功`)
   router.push('/')
 }

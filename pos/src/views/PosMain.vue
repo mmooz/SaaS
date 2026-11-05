@@ -6,11 +6,12 @@
         <div class="store-name">鲜果超市 · 1号收银台</div>
         <div class="header-meta">
           <span class="shift-chip">早班 · 08:00 接班</span>
-          <span class="sync-chip ok">已同步</span>
+          <span class="sync-chip" :class="syncClass">{{ syncText }}</span>
         </div>
       </div>
       <div class="header-clock num">{{ now }}</div>
       <div class="header-actions">
+        <el-button size="large" @click="hangDrawer = true"><el-icon><Folder /></el-icon>&nbsp;挂单</el-button>
         <el-button size="large" @click="$router.push('/reprint')"><el-icon><Printer /></el-icon>&nbsp;补打</el-button>
         <el-button size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
@@ -29,7 +30,7 @@
         </div>
         <div class="category-tabs">
           <button
-            v-for="c in categories"
+            v-for="c in categoryTabs"
             :key="c"
             class="cat-tab"
             :class="{ active: currentCate === c }"
@@ -49,21 +50,24 @@
             <div class="p-unit">{{ p.unit }}</div>
             <div v-if="p.pricingMode === 'weigh'" class="p-badge">称重</div>
           </button>
+          <div v-if="filteredProducts.length === 0" class="empty-products">
+            暂无商品，请在后台录入并同步
+          </div>
         </div>
       </aside>
 
       <!-- 中栏：购物车 -->
       <section class="col-cart">
         <div class="cart-head">
-          <span>购物车（{{ cart.length }} 项）</span>
-          <el-button text @click="clearCart">清空</el-button>
+          <span>购物车（{{ store.cartCount }} 项）</span>
+          <el-button text @click="store.clearCart">清空</el-button>
         </div>
         <div class="cart-list">
-          <div v-if="cart.length === 0" class="cart-empty">
+          <div v-if="store.cart.length === 0" class="cart-empty">
             <div class="empty-icon">🛒</div>
             <p>请选择商品或放上秤盘</p>
           </div>
-          <div v-for="item in cart" :key="item.productId + item.weightKey" class="cart-item">
+          <div v-for="item in store.cart" :key="item.productId + item.weightKey" class="cart-item">
             <div class="ci-main">
               <div class="ci-name">{{ item.name }}</div>
               <div class="ci-sub num">
@@ -76,9 +80,9 @@
             <div class="ci-right">
               <div class="ci-amount num">¥{{ item.amount.toFixed(2) }}</div>
               <div class="ci-ops">
-                <button class="op-btn" @click="decItem(item)">−</button>
-                <button class="op-btn" @click="incItem(item)">+</button>
-                <button class="op-btn danger" @click="removeItem(item)">✕</button>
+                <button class="op-btn" @click="store.decItem(item)">−</button>
+                <button class="op-btn" @click="store.incItem(item)">+</button>
+                <button class="op-btn danger" @click="store.removeItem(item)">✕</button>
               </div>
             </div>
           </div>
@@ -109,10 +113,14 @@
         <div class="total-card">
           <div class="total-row">
             <span>应收合计</span>
-            <span class="total-value num">¥{{ totalAmount.toFixed(2) }}</span>
+            <span class="total-value num">¥{{ store.totalAmount.toFixed(2) }}</span>
           </div>
           <div class="discount-row num" v-if="discount > 0">
             优惠 −¥{{ discount.toFixed(2) }}
+          </div>
+          <div v-if="store.hasOfflineOrders" class="offline-tip">
+            有 {{ store.offlineOrders.length }} 笔订单待上传
+            <el-button link size="small" type="primary" @click="flushOffline">立即重传</el-button>
           </div>
           <div class="pay-buttons">
             <button class="pay-btn" @click="openPay('现金')">💵 现金</button>
@@ -120,25 +128,25 @@
             <button class="pay-btn blue2" @click="openPay('支付宝')">📱 支付宝</button>
             <button class="pay-btn orange" @click="openPay('储值')">💳 储值</button>
           </div>
-          <button class="settle-btn" :disabled="cart.length === 0" @click="settle">
+          <button class="settle-btn" :disabled="store.cart.length === 0" @click="settle">
             结 算（F9）
           </button>
         </div>
       </aside>
     </div>
 
-    <!-- 挂单抽屉：左侧滑出 -->
+    <!-- 挂单抽屉 -->
     <el-drawer v-model="hangDrawer" title="挂单管理" size="380px">
-      <div v-if="hangOrders.length === 0" class="hang-empty">暂无挂单</div>
-      <div v-for="(h, i) in hangOrders" :key="i" class="hang-item">
+      <div v-if="store.hangOrders.length === 0" class="hang-empty">暂无挂单</div>
+      <div v-for="(h, i) in store.hangOrders" :key="i" class="hang-item">
         <div class="hang-info">
           <div class="hang-time num">{{ h.time }}</div>
-          <div class="hang-items">{{ h.items }} 项</div>
+          <div class="hang-items">{{ h.count }} 项</div>
           <div class="hang-amount num">¥{{ h.amount.toFixed(2) }}</div>
         </div>
         <div class="hang-ops">
-          <el-button type="primary" @click="resumeHang(i)">取单</el-button>
-          <el-button text type="danger" @click="removeHang(i)">删除</el-button>
+          <el-button type="primary" @click="store.resumeHang(i)">取单</el-button>
+          <el-button text type="danger" @click="store.removeHang(i)">删除</el-button>
         </div>
       </div>
     </el-drawer>
@@ -146,7 +154,7 @@
     <!-- 支付弹窗 -->
     <el-dialog v-model="payDialog" :title="`${payMethod} 收款`" width="420px" :show-close="false">
       <div class="pay-dialog">
-        <div class="pay-amount num">¥{{ totalAmount.toFixed(2) }}</div>
+        <div class="pay-amount num">¥{{ store.totalAmount.toFixed(2) }}</div>
         <div v-if="payMethod === '现金'" class="cash-input">
           <el-input v-model="cashReceived" size="large" placeholder="输入实收金额" class="num" />
           <div class="change-row">
@@ -173,15 +181,16 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Search, Printer, RefreshLeft, Switch, Setting } from '@element-plus/icons-vue'
+import {
+  Search, Printer, RefreshLeft, Switch, Setting, Folder,
+} from '@element-plus/icons-vue'
+import { usePosStore } from '../stores/posStore'
 
 const router = useRouter()
+const store = usePosStore()
 
-/* ---------- 模拟数据：商品与分类 ---------- */
-const categories = ['全部', '蔬菜', '水果', '肉类', '水产', '粮油副食']
-
-// 商品列表（pricingMode: weigh=称重商品，count=按件标准品）
-const products = [
+/* ---------- 演示兜底数据（后端无数据时使用） ---------- */
+const fallbackProducts = [
   { id: 1, name: '上海青', price: 4.8, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'shq' },
   { id: 2, name: '西红柿', price: 6.5, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'xhs' },
   { id: 3, name: '黄瓜', price: 5.2, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'hg' },
@@ -200,83 +209,78 @@ const products = [
   { id: 16, name: '挂面(袋)', price: 6.9, unit: '袋', pricingMode: 'count', cate: '粮油副食', pinyin: 'gm' },
 ]
 
+/* ---------- 商品来源：优先后端同步数据，空则用演示数据 ---------- */
+const products = computed(() => {
+  if (store.products.length) {
+    // 后端商品字段转换：pricing_mode -> pricingMode
+    return store.products.map((p) => ({
+      id: p.id,
+      name: p.name,
+      price: p.price,
+      unit: p.unit,
+      pricingMode: p.pricing_mode,
+      pinyin: p.pinyin || '',
+      cate: store.categoryName(p.category_id) || '',
+      barcode: p.barcode,
+    }))
+  }
+  return fallbackProducts
+})
+
+// 分类页签：'全部' + 后端一级分类名（无数据时用演示数据分类）
+const categoryTabs = computed(() => {
+  const names = new Set(['全部'])
+  products.value.forEach((p) => p.cate && names.add(p.cate))
+  return [...names]
+})
+
 const keyword = ref('')
 const currentCate = ref('全部')
 
-// 商品筛选：按分类 + 关键字（名称/拼音码）
+// 商品筛选：按分类 + 关键字
 const filteredProducts = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
-  return products.filter((p) => {
+  return products.value.filter((p) => {
     const inCate = currentCate.value === '全部' || p.cate === currentCate.value
-    const inKw = !kw || p.name.includes(kw) || p.pinyin.includes(kw)
+    const inKw = !kw || p.name.includes(kw) || p.pinyin.includes(kw) || p.barcode?.includes(kw)
     return inCate && inKw
   })
 })
 
-/* ---------- 购物车 ---------- */
-const cart = ref([])
+/* ---------- 添加商品 ---------- */
+const currentProduct = ref(null)
+// 整单优惠金额（预留促销规则引擎，S5 实现）
+const discount = ref(0)
 
-// 购物车合计金额
-const totalAmount = computed(() => cart.value.reduce((s, i) => s + i.amount, 0))
-const discount = ref(0) // 整单优惠（模拟：满100减5）
-
-// 添加商品：称重商品进入称重流程，按件商品直接入单
+// 添加商品：按件直接入单，称重进入称重流程
 const addProduct = (p) => {
   if (p.pricingMode === 'count') {
-    const existing = cart.value.find((i) => i.productId === p.id)
-    if (existing) {
-      existing.qty += 1
-      existing.amount = existing.qty * existing.price
-    } else {
-      cart.value.push({
-        productId: p.id, name: p.name, price: p.price, qty: 1,
-        weighted: false, amount: p.price, weightKey: 'count',
-      })
-    }
+    store.addCountProduct(p)
     ElMessage.success(`已加入：${p.name}`)
     return
   }
-  // 称重商品：选中后开始称重流程
   currentProduct.value = p
   manualWeight.value = false
   startWeighing()
 }
 
-const incItem = (item) => {
-  item.qty += 1
-  item.amount = item.qty * item.price
-}
-const decItem = (item) => {
-  if (item.qty <= 1) return removeItem(item)
-  item.qty -= 1
-  item.amount = item.qty * item.price
-}
-const removeItem = (item) => {
-  cart.value = cart.value.filter((i) => i !== item)
-}
-const clearCart = () => {
-  cart.value = []
-  discount.value = 0
-}
-
 /* ---------- 称重模拟（模拟秤） ---------- */
-const currentProduct = ref(null)
 const weight = ref(0)
 const weightStable = ref(false)
 const manualWeight = ref(false)
+const tareOffset = ref(0)
+const scaleOnline = ref(true)
 
-// 重量显示：去皮后净重
 const weightDisplay = computed(() => {
   if (manualWeight.value) return '0.00'
   return (weight.value - tareOffset.value).toFixed(2)
 })
 const weightUnit = computed(() => (currentProduct.value ? 'kg' : ''))
 const scaleStable = computed(() => weightStable.value)
-const scaleOnline = ref(true)
-const tareOffset = ref(0)
 
 let weighTimer = null
 let stableCount = 0
+let prevWeight = 0
 
 // 开始模拟称重：重量渐增至固定目标后小幅抖动，连续稳定判定
 const startWeighing = () => {
@@ -289,10 +293,8 @@ const startWeighing = () => {
   const target = 0.5 + Math.random() * 0.8
   weighTimer = setInterval(() => {
     if (weight.value < target) {
-      // 未达到目标：按步长渐增（模拟放上秤盘的过程）
       weight.value = Math.min(target, weight.value + 0.2 + Math.random() * 0.25)
     } else {
-      // 已达到目标：±0.005 小幅抖动（模拟真实秤的微小波动）
       weight.value = target + (Math.random() - 0.5) * 0.01
     }
     const cur = weight.value - tareOffset.value
@@ -303,16 +305,12 @@ const startWeighing = () => {
     } else {
       stableCount = 0
     }
-    // 连续 3 次稳定 → 自动确认计价
     if (stableCount >= 3) {
       weightStable.value = true
-      if (weight.value > 0.01) {
-        confirmWeight()
-      }
+      if (weight.value > 0.01) confirmWeight()
     }
   }, 260)
 }
-let prevWeight = 0
 
 // 停止模拟称重
 const stopWeighing = () => {
@@ -320,30 +318,23 @@ const stopWeighing = () => {
   weighTimer = null
 }
 
-// 稳定后自动确认：重量 × 单价 入购物车（默认自动，可配置为手动）
+// 稳定后确认：入购物车
 const confirmWeight = () => {
   const net = weight.value - tareOffset.value
   if (net <= 0.001 || !currentProduct.value) return
   const p = currentProduct.value
-  const amount = net * p.price
-  cart.value.push({
-    productId: p.id, name: p.name, price: p.price, qty: 1,
-    weighted: true, weight: +net.toFixed(2),
-    amount: +amount.toFixed(2), weightKey: Date.now(),
-  })
-  ElMessage.success(`${p.name} ${net.toFixed(2)}kg · ¥${amount.toFixed(2)}`)
+  store.confirmWeighted(p, net)
+  ElMessage.success(`${p.name} ${net.toFixed(2)}kg · ¥${(net * p.price).toFixed(2)}`)
   stopWeighing()
   currentProduct.value = null
 }
 
-// 去皮：当前重量作为皮重
+// 去皮/置零
 const doTare = () => {
   tareOffset.value = weight.value
   weightStable.value = false
   ElMessage.success('已去皮')
 }
-
-// 置零
 const doZero = () => {
   tareOffset.value = 0
   weight.value = 0
@@ -359,12 +350,12 @@ const memberMobile = ref('')
 // 找零计算
 const changeAmount = computed(() => {
   const rec = parseFloat(cashReceived.value)
-  return isNaN(rec) ? 0 : Math.max(0, rec - totalAmount.value)
+  return isNaN(rec) ? 0 : Math.max(0, rec - store.totalAmount)
 })
 
 // 打开支付弹窗
 const openPay = (method) => {
-  if (cart.value.length === 0) {
+  if (store.cart.length === 0) {
     ElMessage.warning('购物车为空')
     return
   }
@@ -372,11 +363,11 @@ const openPay = (method) => {
   payDialog.value = true
 }
 
-// 确认收款：模拟结算成功，打印小票 + 称重商品打标签
-const confirmPay = () => {
+// 确认收款：上传订单到服务端，失败则离线保存
+const confirmPay = async () => {
   if (payMethod.value === '现金') {
     const rec = parseFloat(cashReceived.value)
-    if (isNaN(rec) || rec < totalAmount.value) {
+    if (isNaN(rec) || rec < store.totalAmount) {
       ElMessage.warning('实收金额不足')
       return
     }
@@ -385,70 +376,56 @@ const confirmPay = () => {
     ElMessage.warning('请输入会员手机号')
     return
   }
-  const weightedCount = cart.value.filter((i) => i.weighted).length
+  const weightedCount = store.cart.filter((i) => i.weighted).length
   payDialog.value = false
-  // 重置支付输入，避免下次打开残留上次的实收金额/手机号
+  const ok = await store.settle({ payMethod: payMethod.value, memberId: null })
+  if (ok) {
+    ElMessage.success(
+      `收款成功 ¥${store.totalAmount.toFixed(2)} · 已上传订单${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,
+    )
+  } else {
+    ElMessage.warning('网络异常，订单已本地保存，联网后自动上传')
+  }
   cashReceived.value = ''
   memberMobile.value = ''
-  ElMessage.success(
-    `收款成功 ¥${totalAmount.value.toFixed(2)} · 已打印小票${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,
-  )
-  clearCart()
 }
 
 // 结算快捷键 F9
-const settle = () => {
-  openPay('现金')
+const settle = () => openPay('现金')
+
+// 重传离线订单
+const flushOffline = async () => {
+  await store.flushOfflineOrders()
+  if (!store.hasOfflineOrders) ElMessage.success('离线订单已全部上传')
 }
 
-/* ---------- 挂单 ---------- */
+/* ---------- 挂单抽屉 ---------- */
 const hangDrawer = ref(false)
-const hangOrders = ref([])
 
-// 挂单：保存当前购物车并清空
-const hangOrder = () => {
-  if (cart.value.length === 0) return
-  hangOrders.value.unshift({
-    items: cart.value.map((i) => i.name).join('、'),
-    count: cart.value.length,
-    amount: totalAmount.value,
-    time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
-    snapshot: JSON.parse(JSON.stringify(cart.value)),
-  })
-  clearCart()
-  ElMessage.success('已挂单')
-}
+/* ---------- 同步状态与时钟 ---------- */
+const syncClass = computed(() => {
+  if (store.syncState === 'error') return 'err'
+  if (store.syncState === 'syncing') return 'busy'
+  return 'ok'
+})
+const syncText = computed(() => {
+  if (store.syncState === 'error') return '同步失败'
+  if (store.syncState === 'syncing') return '同步中…'
+  return store.lastSyncTime ? '已同步' : '未同步'
+})
 
-// 取单：恢复购物车
-const resumeHang = (i) => {
-  cart.value = hangOrders.value[i].snapshot
-  hangOrders.value.splice(i, 1)
-  hangDrawer.value = false
-  ElMessage.success('已取单')
-}
-
-const removeHang = (i) => {
-  hangOrders.value.splice(i, 1)
-}
-
-/* ---------- 时钟与快捷键 ---------- */
 const now = ref('')
-
-// 更新时间显示
 const updateClock = () => {
   now.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-// 全局快捷键：F9 结算、F10 挂单、Esc 清空
+// 全局快捷键：F9 结算、Esc 清空
 const onKeydown = (e) => {
   if (e.key === 'F9') {
     e.preventDefault()
     settle()
-  } else if (e.key === 'F10') {
-    e.preventDefault()
-    hangOrder()
   } else if (e.key === 'Escape') {
-    clearCart()
+    store.clearCart()
   }
 }
 
@@ -456,6 +433,8 @@ onMounted(() => {
   updateClock()
   setInterval(updateClock, 1000)
   window.addEventListener('keydown', onKeydown)
+  // 启动时同步商品数据（失败不阻塞，使用本地缓存/演示数据）
+  store.syncProducts()
 })
 onBeforeUnmount(() => {
   stopWeighing()
@@ -503,6 +482,14 @@ onBeforeUnmount(() => {
   background: oklch(40% 0.09 152 / 0.5);
   color: oklch(88% 0.08 152);
 }
+.sync-chip.err {
+  background: oklch(40% 0.09 25 / 0.6);
+  color: oklch(88% 0.08 25);
+}
+.sync-chip.busy {
+  background: oklch(40% 0.09 60 / 0.6);
+  color: oklch(90% 0.08 60);
+}
 .header-clock {
   margin-left: auto;
   font-size: 26px;
@@ -527,7 +514,7 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-/* ----- 左栏：商品 ----- */
+/* ----- 左栏 ----- */
 .col-products {
   display: flex;
   flex-direction: column;
@@ -613,8 +600,14 @@ onBeforeUnmount(() => {
   border-radius: 999px;
   font-weight: 600;
 }
+.empty-products {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--neutral-400);
+  padding: 40px 0;
+}
 
-/* ----- 中栏：购物车 ----- */
+/* ----- 中栏 ----- */
 .col-cart {
   display: flex;
   flex-direction: column;
@@ -698,7 +691,7 @@ onBeforeUnmount(() => {
   color: var(--danger);
 }
 
-/* ----- 右栏：称重 + 结算 ----- */
+/* ----- 右栏 ----- */
 .col-settle {
   display: flex;
   flex-direction: column;
@@ -802,6 +795,14 @@ onBeforeUnmount(() => {
   color: var(--success);
   text-align: right;
   margin-bottom: 12px;
+}
+.offline-tip {
+  font-size: 13px;
+  color: var(--warning);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 .pay-buttons {
   display: grid;
