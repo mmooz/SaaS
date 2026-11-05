@@ -94,7 +94,7 @@
         </template>
       </el-table>
 
-      <!-- 分页（模拟总数） -->
+      <!-- 分页（服务端总数） -->
       <div class="pagination-wrap">
         <el-pagination
           v-model:current-page="page"
@@ -226,26 +226,33 @@
       </template>
     </el-dialog>
 
-    <!-- Excel 导入弹窗（示意） -->
+    <!-- Excel 导入弹窗 -->
     <el-dialog v-model="importVisible" title="Excel 导入商品" width="480px">
       <div class="import-tip">
-        <p>支持 .xlsx / .csv 文件，单次最多导入 1000 条商品。</p>
+        <p>支持 .xlsx 文件，单次最多导入 1000 条商品。</p>
         <p>导入模板包含：条码、名称、拼音码、分类、计价方式、单位、零售价等字段。</p>
       </div>
-      <el-upload drag :auto-upload="false" :limit="1" accept=".xlsx,.csv" class="import-upload">
+      <el-upload
+        v-model:file-list="importFiles"
+        drag
+        :auto-upload="false"
+        :limit="1"
+        accept=".xlsx,.xlsm"
+        class="import-upload"
+      >
         <el-icon class="upload-icon"><UploadFilled /></el-icon>
         <div class="el-upload__text">将文件拖到此处，或<em>点击选择文件</em></div>
         <template #tip>
-          <div class="el-upload__tip">请先下载<a class="tpl-link" @click.prevent>导入模板</a>，按模板格式填写后再上传。</div>
+          <div class="el-upload__tip">请先下载<a class="tpl-link" @click.prevent="downloadTemplate">导入模板</a>，按模板格式填写后再上传。</div>
         </template>
       </el-upload>
       <template #footer>
         <el-button @click="importVisible = false">取消</el-button>
-        <el-button type="primary" @click="importVisible = false">开始导入</el-button>
+        <el-button type="primary" :loading="importing" @click="doImport">开始导入</el-button>
       </template>
     </el-dialog>
 
-    <!-- 导出弹窗（示意） -->
+    <!-- 导出弹窗 -->
     <el-dialog v-model="exportVisible" title="导出商品数据" width="440px">
       <el-form label-width="96px">
         <el-form-item label="导出范围">
@@ -263,35 +270,61 @@
       </el-form>
       <template #footer>
         <el-button @click="exportVisible = false">取消</el-button>
-        <el-button type="primary" @click="exportVisible = false">确认导出</el-button>
+        <el-button type="primary" @click="confirmExport">确认导出</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Operation, Upload, Download, UploadFilled } from '@element-plus/icons-vue'
+import {
+  batchAdjustPrice,
+  createProduct,
+  deleteProduct,
+  fetchCategoryTree,
+  fetchProducts,
+  importProducts,
+  productExportUrl,
+  productTemplateUrl,
+  updateProduct,
+} from '../api'
 
-// ---- 模拟数据：分类、单位、商品列表 ----
-const categories = ['蔬菜', '水果', '肉类', '水产', '粮油副食']
+// ---- 分类与单位 ----
+// 分类名称列表（筛选与表单下拉使用）
+const categories = ref([])
+// 分类名称 -> 分类 ID（提交后端时转换）
+const categoryMap = ref({})
 const units = ['kg', 'g', '个', '袋']
 
-// 商品列表（模拟 11 条，含生鲜称重商品）
-const products = ref([
-  { id: 1, barcode: '6901203000011', name: '上海青', pinyin: 'shanghaiqing', category: '蔬菜', pricing: '称重', unit: 'kg', price: 4.98, memberPrice: 4.58, cost: 2.8, stock: 12.5, shelfLife: 2, enabled: true },
-  { id: 2, barcode: '6901203000028', name: '五花肉', pinyin: 'wuhuarou', category: '肉类', pricing: '称重', unit: 'kg', price: 26.8, memberPrice: 25.0, cost: 21.0, stock: 8.5, shelfLife: 3, enabled: true },
-  { id: 3, barcode: '6901203000035', name: '西红柿', pinyin: 'xihongshi', category: '蔬菜', pricing: '称重', unit: 'kg', price: 5.98, memberPrice: 5.48, cost: 3.2, stock: 15.0, shelfLife: 5, enabled: true },
-  { id: 4, barcode: '6901203000042', name: '蜜桔', pinyin: 'miju', category: '水果', pricing: '称重', unit: 'kg', price: 7.98, memberPrice: 7.28, cost: 4.5, stock: 22.0, shelfLife: 7, enabled: true },
-  { id: 5, barcode: '6901203000059', name: '鲜鸡蛋(盒)', pinyin: 'xianjidan', category: '粮油副食', pricing: '按件', unit: '盒', price: 15.9, memberPrice: 15.2, cost: 12.0, stock: 36, shelfLife: 30, enabled: true },
-  { id: 6, barcode: '6901203000066', name: '前腿肉', pinyin: 'qiantuirou', category: '肉类', pricing: '称重', unit: 'kg', price: 23.5, memberPrice: 21.9, cost: 18.5, stock: 6.0, shelfLife: 3, enabled: true },
-  { id: 7, barcode: '6901203000073', name: '土豆', pinyin: 'tudou', category: '蔬菜', pricing: '称重', unit: 'kg', price: 3.28, memberPrice: 2.98, cost: 1.6, stock: 40.0, shelfLife: 10, enabled: true },
-  { id: 8, barcode: '6901203000080', name: '黄瓜', pinyin: 'huanggua', category: '蔬菜', pricing: '称重', unit: 'kg', price: 3.98, memberPrice: 3.68, cost: 2.1, stock: 18.0, shelfLife: 5, enabled: true },
-  { id: 9, barcode: '6901203000097', name: '东北大米(5kg)', pinyin: 'dongbeidami', category: '粮油副食', pricing: '按件', unit: '袋', price: 45.9, memberPrice: 43.9, cost: 38.0, stock: 20, shelfLife: 180, enabled: true },
-  { id: 10, barcode: '6901203000103', name: '草鱼', pinyin: 'caoyu', category: '水产', pricing: '称重', unit: 'kg', price: 15.8, memberPrice: 14.5, cost: 11.0, stock: 5.5, shelfLife: 1, enabled: false },
-  { id: 11, barcode: '6901203000110', name: '大蒜', pinyin: 'dasuan', category: '蔬菜', pricing: '称重', unit: 'kg', price: 9.98, memberPrice: 9.28, cost: 6.5, stock: 8.0, shelfLife: 15, enabled: true },
-])
+// ---- 商品列表（服务端数据） ----
+const products = ref([])
+
+/**
+ * 把后端商品转换为页面展示模型
+ * @param {object} p 后端商品
+ * @returns {object} 页面行数据
+ */
+const toRow = (p) => ({
+  id: p.id,
+  barcode: p.barcode,
+  name: p.name,
+  pinyin: p.pinyin || '',
+  category: p.category_name || '',
+  categoryId: p.category_id,
+  pricing: p.pricing_mode === 'weigh' ? '称重' : '按件',
+  unit: p.unit,
+  price: Number(p.price) || 0,
+  memberPrice: Number(p.member_price) || 0,
+  cost: Number(p.cost_price) || 0,
+  stock: Number(p.stock) || 0,
+  shelfLife: Number(p.shelf_life_days) || 0,
+  safetyStock: Number(p.safety_stock) || 0,
+  labelPrint: !!p.label_enabled,
+  enabled: !!p.enabled,
+})
 
 // ---- 筛选 / 分页状态 ----
 const searchText = ref('')
@@ -300,33 +333,77 @@ const filterPricing = ref('')
 const loading = ref(false)
 const page = ref(1)
 const pageSize = ref(10)
-const total = ref(128) // 模拟总数
+const total = ref(0)
 
-// 按搜索词与筛选条件过滤商品
-const filteredProducts = computed(() => {
-  const kw = searchText.value.trim().toLowerCase()
-  return products.value.filter((p) => {
-    const matchKw = !kw || p.name.includes(kw) || p.pinyin.includes(kw) || p.barcode.includes(kw)
-    const matchCate = !filterCategory.value || p.category === filterCategory.value
-    const matchPricing = !filterPricing.value || p.pricing === filterPricing.value
-    return matchKw && matchCate && matchPricing
-  })
-})
+// 当前分页数据（服务端已分页）
+const pagedProducts = computed(() => products.value)
 
-// 当前分页展示的商品
-const pagedProducts = computed(() => {
-  const start = (page.value - 1) * pageSize.value
-  return filteredProducts.value.slice(start, start + pageSize.value)
-})
-
-// 搜索动作（回到第一页）
-const handleSearch = () => {
-  page.value = 1
+/**
+ * 加载分类树并生成名称映射
+ * @returns {Promise<void>}
+ */
+const loadCategories = async () => {
+  try {
+    const tree = await fetchCategoryTree()
+    const names = []
+    const map = {}
+    const walk = (nodes) => {
+      (nodes || []).forEach((node) => {
+        names.push(node.name)
+        map[node.name] = node.id
+        walk(node.children)
+      })
+    }
+    walk(tree)
+    categories.value = names
+    categoryMap.value = map
+  } catch (err) {
+    ElMessage.error(`分类加载失败：${err.message}`)
+  }
 }
 
-// 状态开关切换提示
-const toggleStatus = (row) => {
-  ElMessage.success(`「${row.name}」已${row.enabled ? '启用' : '停用'}`)
+/**
+ * 按当前筛选条件加载商品（服务端分页）
+ * @returns {Promise<void>}
+ */
+const loadProducts = async () => {
+  loading.value = true
+  try {
+    const data = await fetchProducts({
+      keyword: searchText.value.trim() || undefined,
+      categoryId: categoryMap.value[filterCategory.value] || undefined,
+      pricingMode: filterPricing.value === '称重'
+        ? 'weigh'
+        : filterPricing.value === '按件'
+          ? 'count'
+          : undefined,
+      page: page.value,
+      pageSize: pageSize.value,
+    })
+    products.value = (data.items || []).map(toRow)
+    total.value = data.total || 0
+  } catch (err) {
+    ElMessage.error(`商品加载失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 搜索动作（回到第一页后查询）
+const handleSearch = () => {
+  page.value = 1
+  loadProducts()
+}
+
+// 切换状态：调用后端更新启停
+const toggleStatus = async (row) => {
+  try {
+    await updateProduct(row.id, { enabled: row.enabled })
+    ElMessage.success(`「${row.name}」已${row.enabled ? '启用' : '停用'}`)
+  } catch (err) {
+    row.enabled = !row.enabled
+    ElMessage.error(`状态更新失败：${err.message}`)
+  }
 }
 
 // ---- 新增 / 编辑商品 ----
@@ -336,6 +413,7 @@ const formRef = ref(null)
 const form = ref({
   id: 0, barcode: '', name: '', pinyin: '', category: '', pricing: '称重', unit: 'kg',
   price: 0, memberPrice: 0, cost: 0, shelfLife: 30, stock: 0, safetyStock: 0, labelPrint: true,
+  enabled: true,
 })
 
 // 表单校验规则
@@ -354,6 +432,7 @@ const openAdd = () => {
   form.value = {
     id: 0, barcode: '', name: '', pinyin: '', category: '', pricing: '称重', unit: 'kg',
     price: 0, memberPrice: 0, cost: 0, shelfLife: 30, stock: 0, safetyStock: 0, labelPrint: true,
+    enabled: true,
   }
   formVisible.value = true
 }
@@ -364,38 +443,64 @@ const openEdit = (row) => {
   formVisible.value = true
 }
 
-// 提交表单：模拟保存
+/**
+ * 表单转后端请求字段
+ * @param {object} f 表单数据
+ * @returns {object} 后端商品字段
+ */
+const toPayload = (f) => ({
+  barcode: f.barcode,
+  name: f.name,
+  pinyin: f.pinyin,
+  category_id: categoryMap.value[f.category] ?? null,
+  pricing_mode: f.pricing === '称重' ? 'weigh' : 'count',
+  unit: f.unit,
+  price: f.price,
+  member_price: f.memberPrice,
+  cost_price: f.cost,
+  shelf_life_days: f.shelfLife,
+  stock: f.stock,
+  safety_stock: f.safetyStock,
+  label_enabled: f.labelPrint,
+  enabled: f.enabled !== false,
+})
+
+// 提交表单：新增或更新商品
 const submitForm = () => {
-  formRef.value.validate((valid) => {
+  formRef.value.validate(async (valid) => {
     if (!valid) return
     const isEdit = form.value.id !== 0
-    if (isEdit) {
-      // 编辑：同步回列表
-      const idx = products.value.findIndex((p) => p.id === form.value.id)
-      if (idx > -1) products.value[idx] = { ...form.value }
-      ElMessage.success('商品已更新')
-    } else {
-      // 新增：插入列表头部并模拟编号
-      form.value.id = Date.now()
-      products.value.unshift({ ...form.value })
-      total.value += 1
-      ElMessage.success('商品已新增')
+    try {
+      if (isEdit) {
+        await updateProduct(form.value.id, toPayload(form.value))
+        ElMessage.success('商品已更新')
+      } else {
+        await createProduct(toPayload(form.value))
+        ElMessage.success('商品已新增')
+      }
+      formVisible.value = false
+      await loadProducts()
+    } catch (err) {
+      ElMessage.error(`保存失败：${err.message}`)
     }
-    formVisible.value = false
   })
 }
 
-// 删除商品：二次确认
+// 删除商品：二次确认后调用后端
 const handleDelete = (row) => {
   ElMessageBox.confirm(`确定删除商品「${row.name}」吗？删除后不可恢复。`, '删除确认', {
     confirmButtonText: '删除',
     cancelButtonText: '取消',
     type: 'warning',
   })
-    .then(() => {
-      products.value = products.value.filter((p) => p.id !== row.id)
-      total.value -= 1
-      ElMessage.success('删除成功')
+    .then(async () => {
+      try {
+        await deleteProduct(row.id)
+        ElMessage.success('删除成功')
+        await loadProducts()
+      } catch (err) {
+        ElMessage.error(`删除失败：${err.message}`)
+      }
     })
     .catch(() => {})
 }
@@ -407,18 +512,70 @@ const batch = ref({
   scope: 'category', category: '', products: [], method: 'percent', amount: 5,
 })
 
-// 确认批量改价：模拟执行并按方式提示
-const submitBatch = () => {
-  const target = batch.value.scope === 'category' ? `分类「${batch.value.category || '未选择'}」` : `${batch.value.products.length} 个商品`
-  ElMessage.success(`已按${batch.value.method === 'percent' ? '比例' : '固定值'}方式调整 ${target} 的价格`)
-  batchVisible.value = false
+// 确认批量改价：调用后端按分类/商品调整价格
+const submitBatch = async () => {
+  try {
+    const data = await batchAdjustPrice({
+      mode: batch.value.scope === 'category' ? 'category' : 'product',
+      categoryId: categoryMap.value[batch.value.category] ?? null,
+      productIds: batch.value.products,
+      adjustType: batch.value.method,
+      value: batch.value.amount,
+    })
+    ElMessage.success(data.message || '批量改价完成')
+    batchVisible.value = false
+    await loadProducts()
+  } catch (err) {
+    ElMessage.error(`改价失败：${err.message}`)
+  }
 }
 
-// ---- 导入 / 导出弹窗（示意） ----
+// ---- 导入 / 导出 ----
 const importVisible = ref(false)
 const exportVisible = ref(false)
 const exportScope = ref('filter')
 const exportFormat = ref('xlsx')
+const importFiles = ref([])
+const importing = ref(false)
+
+// 下载商品导入模板
+const downloadTemplate = () => {
+  window.open(productTemplateUrl(), '_blank')
+}
+
+// 执行 Excel 导入
+const doImport = async () => {
+  if (!importFiles.value.length) {
+    ElMessage.warning('请先选择 .xlsx 文件')
+    return
+  }
+  importing.value = true
+  try {
+    const result = await importProducts(importFiles.value[0].raw)
+    ElMessage.success(`导入完成：新增 ${result.created ?? 0} 条，更新 ${result.updated ?? 0} 条，失败 ${result.failed ?? 0} 条`)
+    importVisible.value = false
+    importFiles.value = []
+    await loadProducts()
+  } catch (err) {
+    ElMessage.error(`导入失败：${err.message}`)
+  } finally {
+    importing.value = false
+  }
+}
+
+// 导出商品数据（后端导出全部商品为 Excel）
+const confirmExport = () => {
+  window.open(productExportUrl(), '_blank')
+  exportVisible.value = false
+}
+
+// 分页参数变化时重新查询
+watch([page, pageSize], () => loadProducts())
+
+onMounted(async () => {
+  await loadCategories()
+  await loadProducts()
+})
 </script>
 
 <style scoped>
