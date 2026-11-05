@@ -7,5 +7,7 @@ export default defineConfig({
   server: {
     port: 5174,
     host: '0.0.0.0',
+    // 忽略 Rust 构建产物，避免 cargo 编译时触发 EBUSY 监听错误
+    watch: { ignored: ['**/src-tauri/**'] },
   },
 })
