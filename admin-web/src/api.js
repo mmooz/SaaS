@@ -3,6 +3,10 @@
 const BASE_URL = 'http://127.0.0.1:8000'
 // 后台登录令牌缓存键
 const TOKEN_KEY = 'admin_token'
+// 当前门店 ID 缓存键
+const STORE_KEY = 'admin_store_id'
+// 可访问门店列表缓存键
+const STORES_KEY = 'admin_stores'
 
 /**
  * 保存后台登录令牌
@@ -28,6 +32,50 @@ export function clearAdminToken() {
 }
 
 /**
+ * 保存可访问门店列表（登录成功后调用）
+ * @param {Array<{id:string,name:string}>} stores 门店列表
+ */
+export function setStores(stores) {
+  localStorage.setItem(STORES_KEY, JSON.stringify(stores || []))
+}
+
+/**
+ * 读取可访问门店列表
+ * @returns {Array<{id:string,name:string}>} 门店列表
+ */
+export function getStores() {
+  try {
+    return JSON.parse(localStorage.getItem(STORES_KEY) || '[]')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 设置当前选中的门店 ID
+ * @param {string} storeId 门店 ID
+ */
+export function setCurrentStore(storeId) {
+  localStorage.setItem(STORE_KEY, String(storeId))
+}
+
+/**
+ * 读取当前选中的门店 ID
+ * @returns {string} 门店 ID
+ */
+export function getCurrentStore() {
+  return localStorage.getItem(STORE_KEY) || ''
+}
+
+/**
+ * 清除门店相关缓存（退出登录时调用）
+ */
+export function clearStoreInfo() {
+  localStorage.removeItem(STORE_KEY)
+  localStorage.removeItem(STORES_KEY)
+}
+
+/**
  * 后台登录
  * @param {string} username 用户名
  * @param {string} password 密码
@@ -48,11 +96,13 @@ export function login(username, password) {
  */
 async function request(path, options = {}) {
   const token = getAdminToken()
+  const storeId = getCurrentStore()
   const res = await fetch(`${BASE_URL}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(storeId ? { 'X-Store-Id': storeId } : {}),
       ...(options.headers || {}),
     },
   })
@@ -72,11 +122,14 @@ async function request(path, options = {}) {
  */
 async function upload(path, file) {
   const token = getAdminToken()
+  const storeId = getCurrentStore()
   const form = new FormData()
   form.append('file', file)
+  const headers = { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  if (storeId) headers['X-Store-Id'] = storeId
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
     body: form,
   })
   if (!res.ok) {

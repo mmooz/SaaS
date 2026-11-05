@@ -4,11 +4,16 @@ import { defineStore } from 'pinia'
 import { PromotionEngine } from '../services/PromotionEngine.js'
 import {
   clearAuthToken,
+  clearStoreInfo,
   consumeMember,
   fetchActivePromotions,
   fetchSyncData,
+  getCurrentStore,
+  getStores,
   refundOrder as apiRefundOrder,
   setAuthToken,
+  setCurrentStore,
+  setStores,
   syncShifts,
   uploadOrder,
 } from '../api.js'
@@ -49,6 +54,12 @@ export const usePosStore = defineStore('pos', {
     lastSyncTime: null,
     // 当前收银员（从本地缓存恢复，退出登录后清空）
     cashier: loadLS(LS_CASHIER, null),
+    // 当前选中的门店（从本地缓存恢复，用于请求头 X-Store-Id）
+    currentStore: (() => {
+      const storeId = getCurrentStore()
+      const stores = getStores()
+      return stores.find((s) => String(s.id) === storeId) || null
+    })(),
     // 当前进行中的班次 ID（订单上传时归属班次，未接班为 null）
     shiftId: loadLS(LS_SHIFT, null),
     // 当前识别的会员（null 表示散客）
@@ -171,13 +182,34 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 保存登录结果：写入令牌与收银员身份（应用重启后保持登录）
+     * 保存登录结果：写入令牌、收银员身份与门店信息（应用重启后保持登录）
      * @param {string} token 登录令牌
      * @param {object} user 收银员信息
+     * @param {Array<object>} stores 用户可访问的门店列表
      */
-    setAuth(token, user) {
+    setAuth(token, user, stores) {
       setAuthToken(token)
       this.setCashier(user)
+      // 保存门店列表并默认选中第一个门店
+      const storeList = stores || []
+      setStores(storeList)
+      if (storeList.length > 0) {
+        setCurrentStore(storeList[0].id)
+        this.currentStore = storeList[0]
+      }
+    },
+
+    /**
+     * 切换当前门店（多门店收银员使用）
+     * @param {string} storeId 门店 ID
+     */
+    switchStore(storeId) {
+      const stores = getStores()
+      const store = stores.find((s) => String(s.id) === String(storeId))
+      if (store) {
+        setCurrentStore(store.id)
+        this.currentStore = store
+      }
     },
 
     /**
@@ -190,16 +222,18 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 退出登录：清空令牌、收银员、会员与购物车，避免下一位收银员沿用上一班数据
+     * 退出登录：清空令牌、收银员、门店、会员与购物车，避免下一位收银员沿用上一班数据
      */
     clearCashier() {
       this.cashier = null
       this.member = null
       this.shiftId = null
+      this.currentStore = null
       this.clearCart()
       localStorage.removeItem(LS_CASHIER)
       localStorage.removeItem(LS_SHIFT)
       clearAuthToken()
+      clearStoreInfo()
     },
 
     /**

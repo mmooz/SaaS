@@ -74,13 +74,17 @@ const doLogin = async () => {
   loading.value = true
   try {
     const result = await login(username, form.password.trim())
-    // 保存令牌与收银员身份（启动后保持登录，结算时随订单上传工号）
-    store.setAuth(result.access_token, {
-      id: result.user.id,
-      no: result.user.username,
-      name: result.user.name,
-      role: result.user.role,
-    })
+    // 保存令牌、收银员身份与可访问门店列表（默认选中第一个门店）
+    store.setAuth(
+      result.access_token,
+      {
+        id: result.user.id,
+        no: result.user.username,
+        name: result.user.name,
+        role: result.user.role,
+      },
+      result.stores || [],
+    )
     ElMessage.success(`欢迎回来，${result.user.name}`)
     goAfterLogin()
   } catch (err) {

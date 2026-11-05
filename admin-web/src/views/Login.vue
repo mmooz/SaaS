@@ -45,7 +45,7 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { login, setAdminToken } from '../api'
+import { login, setAdminToken, setStores, setCurrentStore } from '../api'
 
 const router = useRouter()
 
@@ -76,6 +76,12 @@ const handleLogin = async () => {
       return
     }
     setAdminToken(res.access_token)
+    // 保存可访问门店列表，默认选中第一个门店
+    const stores = res.stores || []
+    setStores(stores)
+    if (stores.length > 0) {
+      setCurrentStore(stores[0].id)
+    }
     ElMessage.success(`欢迎回来，${res.user.name}`)
     router.push('/dashboard')
   } catch (err) {

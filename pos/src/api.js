@@ -6,6 +6,12 @@ const BASE_URL = 'http://127.0.0.1:8000'
 // 登录令牌在 localStorage 中的键名
 const TOKEN_KEY = 'pos_token'
 
+// 当前门店 ID 在 localStorage 中的键名
+const STORE_KEY = 'pos_store_id'
+
+// 用户可访问的门店列表在 localStorage 中的键名
+const STORES_KEY = 'pos_stores'
+
 /**
  * 保存登录令牌（登录成功后调用）
  * @param {string} token 访问令牌
@@ -30,6 +36,50 @@ export function clearAuthToken() {
 }
 
 /**
+ * 保存用户可访问的门店列表（登录成功后调用）
+ * @param {Array<{id:string,name:string}>} stores 门店列表
+ */
+export function setStores(stores) {
+  localStorage.setItem(STORES_KEY, JSON.stringify(stores || []))
+}
+
+/**
+ * 读取用户可访问的门店列表
+ * @returns {Array<{id:string,name:string}>} 门店列表
+ */
+export function getStores() {
+  try {
+    return JSON.parse(localStorage.getItem(STORES_KEY) || '[]')
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 设置当前选中的门店 ID
+ * @param {string} storeId 门店 ID
+ */
+export function setCurrentStore(storeId) {
+  localStorage.setItem(STORE_KEY, String(storeId))
+}
+
+/**
+ * 读取当前选中的门店 ID
+ * @returns {string} 门店 ID
+ */
+export function getCurrentStore() {
+  return localStorage.getItem(STORE_KEY) || ''
+}
+
+/**
+ * 清除门店相关本地数据（退出登录时调用）
+ */
+export function clearStoreInfo() {
+  localStorage.removeItem(STORE_KEY)
+  localStorage.removeItem(STORES_KEY)
+}
+
+/**
  * 发起 JSON 请求
  * @param {string} path 接口路径
  * @param {object} options fetch 选项
@@ -37,11 +87,14 @@ export function clearAuthToken() {
  */
 async function request(path, options = {}) {
   const token = getAuthToken()
+  const storeId = getCurrentStore()
   const res = await fetch(`${BASE_URL}${path}`, {
     headers: {
       'Content-Type': 'application/json',
       // 已登录时自动携带令牌，供后端识别当前用户
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      // 已选门店时携带门店 ID，供后端做门店数据隔离
+      ...(storeId ? { 'X-Store-Id': storeId } : {}),
     },
     ...options,
   })

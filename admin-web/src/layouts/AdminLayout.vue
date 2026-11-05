@@ -81,7 +81,7 @@ import {
   Odometer, Box, FolderOpened, Avatar, PriceTag, SetUp, DataAnalysis,
   Setting, ArrowDown,
 } from '@element-plus/icons-vue'
-import { clearAdminToken } from '../api'
+import { clearAdminToken, clearStoreInfo } from '../api'
 
 const route = useRoute()
 const router = useRouter()
@@ -97,6 +97,8 @@ const syncOk = ref(true)
 
 // 退出登录：跳转登录页
 const logout = () => {
+  clearAdminToken()
+  clearStoreInfo()
   router.push('/login')
 }
 </script>
