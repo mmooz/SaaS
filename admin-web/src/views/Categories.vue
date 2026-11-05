@@ -1,7 +1,7 @@
 <template>
   <div class="categories-page">
     <!-- 左侧：两级分类树 -->
-    <div class="tree-card">
+    <div class="tree-card" v-loading="loading">
       <div class="card-head">
         <h3>商品分类</h3>
         <el-button type="primary" link size="small" @click="openAdd(null)">
@@ -39,13 +39,13 @@
             </el-tag>
           </div>
           <div class="detail-actions">
-            <el-button v-if="!current.isRoot" size="small" @click="openAdd(current)">
+            <el-button v-if="current.id && current.isRoot" size="small" @click="openAdd(current)">
               <el-icon><Plus /></el-icon>新增子分类
             </el-button>
-            <el-button size="small" @click="editVisible = true">
+            <el-button size="small" :disabled="!current.id" @click="openEdit(current)">
               <el-icon><EditPen /></el-icon>编辑名称
             </el-button>
-            <el-button size="small" type="danger" plain @click="handleDelete(current)">
+            <el-button size="small" type="danger" plain :disabled="!current.id" @click="handleDelete(current)">
               <el-icon><Delete /></el-icon>删除
             </el-button>
           </div>
@@ -113,83 +113,176 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, EditPen, Delete } from '@element-plus/icons-vue'
+import {
+  fetchCategoryTree,
+  fetchProducts,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+} from '../api'
 
-// ---- 模拟数据：分类树（两级） ----
-// 每个分类节点携带商品数统计信息
-const treeData = ref([
-  {
-    id: 'veg', name: '蔬菜', count: 38, isRoot: true, parentName: '', createdAt: '2025-06-01', onSale: 35, offSale: 3, newThisMonth: 5, sort: 1,
-    children: [
-      { id: 'veg-leaf', name: '叶菜', count: 12, isRoot: false, parentName: '蔬菜', createdAt: '2025-06-01', onSale: 11, offSale: 1, newThisMonth: 2, sort: 1 },
-      { id: 'veg-root', name: '根茎', count: 9, isRoot: false, parentName: '蔬菜', createdAt: '2025-06-01', onSale: 9, offSale: 0, newThisMonth: 1, sort: 2 },
-      { id: 'veg-fruit', name: '茄果', count: 8, isRoot: false, parentName: '蔬菜', createdAt: '2025-06-10', onSale: 7, offSale: 1, newThisMonth: 1, sort: 3 },
-      { id: 'veg-mushroom', name: '菌菇', count: 5, isRoot: false, parentName: '蔬菜', createdAt: '2025-07-02', onSale: 5, offSale: 0, newThisMonth: 0, sort: 4 },
-      { id: 'veg-bean', name: '豆类', count: 4, isRoot: false, parentName: '蔬菜', createdAt: '2025-07-15', onSale: 3, offSale: 1, newThisMonth: 1, sort: 5 },
-    ],
-  },
-  {
-    id: 'fruit', name: '水果', count: 28, isRoot: true, parentName: '', createdAt: '2025-06-01', onSale: 27, offSale: 1, newThisMonth: 4, sort: 2,
-    children: [
-      { id: 'fruit-citrus', name: '柑橘', count: 6, isRoot: false, parentName: '水果', createdAt: '2025-06-01', onSale: 6, offSale: 0, newThisMonth: 1, sort: 1 },
-      { id: 'fruit-berry', name: '浆果', count: 5, isRoot: false, parentName: '水果', createdAt: '2025-06-05', onSale: 5, offSale: 0, newThisMonth: 1, sort: 2 },
-      { id: 'fruit-stone', name: '核果', count: 4, isRoot: false, parentName: '水果', createdAt: '2025-06-12', onSale: 4, offSale: 0, newThisMonth: 0, sort: 3 },
-      { id: 'fruit-melon', name: '瓜类', count: 5, isRoot: false, parentName: '水果', createdAt: '2025-07-01', onSale: 5, offSale: 0, newThisMonth: 2, sort: 4 },
-      { id: 'fruit-tropical', name: '热带', count: 8, isRoot: false, parentName: '水果', createdAt: '2025-08-10', onSale: 7, offSale: 1, newThisMonth: 0, sort: 5 },
-    ],
-  },
-  {
-    id: 'meat', name: '肉类', count: 18, isRoot: true, parentName: '', createdAt: '2025-06-01', onSale: 17, offSale: 1, newThisMonth: 2, sort: 3,
-    children: [
-      { id: 'meat-pork', name: '猪肉', count: 6, isRoot: false, parentName: '肉类', createdAt: '2025-06-01', onSale: 6, offSale: 0, newThisMonth: 1, sort: 1 },
-      { id: 'meat-beef', name: '牛肉', count: 3, isRoot: false, parentName: '肉类', createdAt: '2025-06-18', onSale: 3, offSale: 0, newThisMonth: 0, sort: 2 },
-      { id: 'meat-poultry', name: '禽肉', count: 5, isRoot: false, parentName: '肉类', createdAt: '2025-07-01', onSale: 4, offSale: 1, newThisMonth: 1, sort: 3 },
-      { id: 'meat-lamb', name: '羊肉', count: 2, isRoot: false, parentName: '肉类', createdAt: '2025-07-20', onSale: 2, offSale: 0, newThisMonth: 0, sort: 4 },
-      { id: 'meat-other', name: '其他', count: 2, isRoot: false, parentName: '肉类', createdAt: '2025-08-05', onSale: 2, offSale: 0, newThisMonth: 0, sort: 5 },
-    ],
-  },
-  {
-    id: 'aquatic', name: '水产', count: 12, isRoot: true, parentName: '', createdAt: '2025-06-01', onSale: 11, offSale: 1, newThisMonth: 1, sort: 4,
-    children: [
-      { id: 'aquatic-fresh', name: '淡水鱼', count: 5, isRoot: false, parentName: '水产', createdAt: '2025-06-01', onSale: 5, offSale: 0, newThisMonth: 1, sort: 1 },
-      { id: 'aquatic-sea', name: '海鲜', count: 4, isRoot: false, parentName: '水产', createdAt: '2025-06-22', onSale: 3, offSale: 1, newThisMonth: 0, sort: 2 },
-      { id: 'aquatic-shrimp', name: '虾蟹', count: 3, isRoot: false, parentName: '水产', createdAt: '2025-07-10', onSale: 3, offSale: 0, newThisMonth: 0, sort: 3 },
-    ],
-  },
-  {
-    id: 'grocery', name: '粮油副食', count: 24, isRoot: true, parentName: '', createdAt: '2025-06-01', onSale: 23, offSale: 1, newThisMonth: 2, sort: 5,
-    children: [
-      { id: 'grocery-rice', name: '米面', count: 6, isRoot: false, parentName: '粮油副食', createdAt: '2025-06-01', onSale: 6, offSale: 0, newThisMonth: 1, sort: 1 },
-      { id: 'grocery-oil', name: '食用油', count: 4, isRoot: false, parentName: '粮油副食', createdAt: '2025-06-08', onSale: 4, offSale: 0, newThisMonth: 0, sort: 2 },
-      { id: 'grocery-seasoning', name: '调味品', count: 5, isRoot: false, parentName: '粮油副食', createdAt: '2025-06-15', onSale: 5, offSale: 0, newThisMonth: 1, sort: 3 },
-      { id: 'grocery-dry', name: '干货', count: 4, isRoot: false, parentName: '粮油副食', createdAt: '2025-07-01', onSale: 3, offSale: 1, newThisMonth: 0, sort: 4 },
-      { id: 'grocery-egg', name: '蛋品', count: 5, isRoot: false, parentName: '粮油副食', createdAt: '2025-07-12', onSale: 5, offSale: 0, newThisMonth: 0, sort: 5 },
-    ],
-  },
-])
+// 分类树数据（节点含商品统计）
+const treeData = ref([])
+// 树加载状态
+const loading = ref(false)
 
+// el-tree 字段映射
 const treeProps = { children: 'children', label: 'name' }
 
-// 当前选中的分类节点（默认选中第一个一级分类）
-const current = ref(treeData.value[0])
+// 空分类占位（未选中或暂无分类时展示）
+const emptyCategory = {
+  id: null,
+  name: '未选择分类',
+  count: 0,
+  isRoot: true,
+  parentId: null,
+  parentName: '',
+  createdAt: '',
+  onSale: 0,
+  offSale: 0,
+  newThisMonth: 0,
+  sort: 0,
+  enabled: true,
+}
+
+// 当前选中的分类节点（默认第一个一级分类）
+const current = ref({ ...emptyCategory })
+
+/**
+ * 拉取全部商品（分页循环，供分类统计使用）
+ * @returns {Promise<Array<object>>} 全部商品
+ */
+async function fetchAllProducts() {
+  const all = []
+  let page = 1
+  while (true) {
+    const res = await fetchProducts({ page, pageSize: 200 })
+    const items = res.items || []
+    all.push(...items)
+    if (all.length >= (res.total || 0) || items.length < 200) break
+    page += 1
+  }
+  return all
+}
+
+/**
+ * 统计各分类的商品数量（在售/停售/本月上新）
+ * @param {Array<object>} products 商品列表
+ * @returns {object} 分类 ID -> 统计结果
+ */
+function buildStats(products) {
+  const now = new Date()
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime()
+  const stats = {}
+  products.forEach((p) => {
+    if (p.category_id == null) return
+    const s = stats[p.category_id] || (stats[p.category_id] = { total: 0, onSale: 0, offSale: 0, newThisMonth: 0 })
+    s.total += 1
+    if (p.enabled) s.onSale += 1
+    else s.offSale += 1
+    if (p.created_at && new Date(p.created_at).getTime() >= monthStart) s.newThisMonth += 1
+  })
+  return stats
+}
+
+/**
+ * 递归构造树节点，并将子分类商品数量汇总到父节点
+ * @param {object} cat 服务端分类节点
+ * @param {string} parentName 上级分类名称
+ * @param {object} stats 分类统计结果
+ * @returns {object} 前端树节点
+ */
+function buildNode(cat, parentName, stats) {
+  const own = stats[cat.id] || { total: 0, onSale: 0, offSale: 0, newThisMonth: 0 }
+  const node = {
+    id: cat.id,
+    name: cat.name,
+    count: own.total,
+    isRoot: cat.parent_id == null,
+    parentId: cat.parent_id,
+    parentName,
+    createdAt: (cat.created_at || '').slice(0, 10),
+    onSale: own.onSale,
+    offSale: own.offSale,
+    newThisMonth: own.newThisMonth,
+    sort: cat.sort,
+    enabled: cat.enabled,
+    children: [],
+  }
+  // 子分类递归构建并累计统计
+  node.children = (cat.children || []).map((c) => buildNode(c, cat.name, stats))
+  node.children.forEach((k) => {
+    node.count += k.count
+    node.onSale += k.onSale
+    node.offSale += k.offSale
+    node.newThisMonth += k.newThisMonth
+  })
+  return node
+}
+
+/**
+ * 在树中按 ID 查找节点
+ * @param {Array<object>} nodes 树节点
+ * @param {number} id 分类 ID
+ * @returns {object|null} 命中节点
+ */
+function findNode(nodes, id) {
+  for (const n of nodes) {
+    if (n.id === id) return n
+    const hit = findNode(n.children || [], id)
+    if (hit) return hit
+  }
+  return null
+}
+
+// 加载分类树与商品统计
+async function loadData() {
+  loading.value = true
+  try {
+    const [tree, products] = await Promise.all([fetchCategoryTree(), fetchAllProducts()])
+    const stats = buildStats(products)
+    treeData.value = tree.map((c) => buildNode(c, '', stats))
+    // 保持原选中项，不存在时回退到第一个一级分类
+    const selectedId = current.value.id
+    const hit = selectedId != null ? findNode(treeData.value, selectedId) : null
+    current.value = hit || treeData.value[0] || { ...emptyCategory }
+  } catch (e) {
+    ElMessage.error(e.message || '分类加载失败')
+  } finally {
+    loading.value = false
+  }
+}
 
 // 点击树节点：切换右侧详情
 const onNodeClick = (data) => {
   current.value = data
 }
 
-// 保存排序：模拟提示
-const saveSort = () => {
-  ElMessage.success(`已保存「${current.value.name}」的排序值 ${current.value.sort}`)
+// 保存排序：写回服务端
+const saveSort = async () => {
+  if (!current.value.id) return
+  try {
+    await updateCategory(current.value.id, {
+      name: current.value.name,
+      parentId: current.value.parentId,
+      sort: current.value.sort,
+      enabled: current.value.enabled,
+    })
+    ElMessage.success(`已保存「${current.value.name}」的排序值 ${current.value.sort}`)
+    await loadData()
+  } catch (e) {
+    ElMessage.error(e.message || '排序保存失败')
+  }
 }
 
 // ---- 新增 / 编辑分类 ----
 const addVisible = ref(false)
 const addFormRef = ref(null)
 // 新增 / 编辑分类表单模型
-const addForm = ref({ id: '', name: '', sort: 0, parentId: null, parentName: '' })
+const addForm = ref({ id: null, name: '', sort: 0, parentId: null, parentName: '' })
 const addRules = {
   name: [{ required: true, message: '请输入分类名称', trigger: 'blur' }],
 }
@@ -197,72 +290,76 @@ const addRules = {
 // 打开新增弹窗：parent 为空表示新增一级分类
 const openAdd = (parent) => {
   addForm.value = {
-    id: '', name: '', sort: 0,
+    id: null,
+    name: '',
+    sort: 0,
     parentId: parent ? parent.id : null,
     parentName: parent ? parent.name : '',
   }
   addVisible.value = true
 }
 
-// 提交新增 / 编辑：模拟保存到树中
+// 打开编辑弹窗：回填当前分类
+const openEdit = (node) => {
+  if (!node.id) return
+  addForm.value = {
+    id: node.id,
+    name: node.name,
+    sort: node.sort,
+    parentId: node.parentId,
+    parentName: node.parentName,
+  }
+  addVisible.value = true
+}
+
+// 提交新增 / 编辑到服务端
 const submitAdd = () => {
-  addFormRef.value.validate((valid) => {
+  addFormRef.value.validate(async (valid) => {
     if (!valid) return
     const { name, sort, parentId, id } = addForm.value
-    const isEdit = !!id
-    if (isEdit) {
-      // 编辑：更新当前选中节点名称与排序
-      current.value.name = name
-      current.value.sort = sort
-      ElMessage.success('分类已更新')
-    } else if (parentId) {
-      // 新增二级分类：挂到父节点下
-      const parent = treeData.value.find((n) => n.id === parentId) || current.value
-      const newId = `${parent.id}-${name}`
-      parent.children = parent.children || []
-      parent.children.push({
-        id: newId, name, count: 0, isRoot: false, parentName: parent.name,
-        createdAt: '2026-11-05', onSale: 0, offSale: 0, newThisMonth: 0, sort,
-      })
-      ElMessage.success(`已新增二级分类「${name}」`)
-    } else {
-      // 新增一级分类：追加到树末尾
-      const newId = `cate-${Date.now()}`
-      treeData.value.push({
-        id: newId, name, count: 0, isRoot: true, parentName: '',
-        createdAt: '2026-11-05', onSale: 0, offSale: 0, newThisMonth: 0, sort, children: [],
-      })
-      ElMessage.success(`已新增一级分类「${name}」`)
+    try {
+      if (id) {
+        await updateCategory(id, { name, parentId, sort, enabled: true })
+        ElMessage.success('分类已更新')
+      } else {
+        await createCategory({ name, parentId, sort, enabled: true })
+        ElMessage.success(`已新增分类「${name}」`)
+      }
+      addVisible.value = false
+      await loadData()
+    } catch (e) {
+      ElMessage.error(e.message || '保存失败')
     }
-    addVisible.value = false
   })
 }
 
-// 删除分类：二次确认（含子分类 / 商品数校验提示）
+// 删除分类：二次确认，服务端校验子分类/商品占用
 const handleDelete = (node) => {
+  if (!node.id) return
   const hasChildren = node.children && node.children.length > 0
   const tip = hasChildren
-    ? `分类「${node.name}」下还有 ${node.children.length} 个子分类，删除后子分类将一并删除。`
-    : `确定删除分类「${node.name}」吗？删除后其下商品将归属「未分类」。`
+    ? `分类「${node.name}」下还有 ${node.children.length} 个子分类，需先处理子分类后才能删除。`
+    : `确定删除分类「${node.name}」吗？`
   ElMessageBox.confirm(tip, '删除确认', {
     confirmButtonText: '删除',
     cancelButtonText: '取消',
     type: 'warning',
   })
-    .then(() => {
-      if (node.isRoot) {
-        treeData.value = treeData.value.filter((n) => n.id !== node.id)
-      } else {
-        // 从父节点 children 中移除
-        const parent = treeData.value.find((n) => n.children && n.children.some((c) => c.id === node.id))
-        if (parent) parent.children = parent.children.filter((c) => c.id !== node.id)
+    .then(async () => {
+      try {
+        await deleteCategory(node.id)
+        current.value = { ...emptyCategory }
+        ElMessage.success('删除成功')
+        await loadData()
+      } catch (e) {
+        ElMessage.error(e.message || '删除失败')
       }
-      // 删除后回退到第一个一级分类
-      current.value = treeData.value[0]
-      ElMessage.success('删除成功')
     })
     .catch(() => {})
 }
+
+// 页面初始化：加载分类树
+onMounted(loadData)
 </script>
 
 <style scoped>
