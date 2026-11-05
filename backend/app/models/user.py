@@ -10,7 +10,7 @@ from app.services.snowflake import next_id
 
 
 class User(Base):
-    """系统用户表：角色决定权限（admin=管理员，manager=店长，cashier=收银员）。"""
+    """系统用户表：角色决定权限（super=平台超级管理员，admin=租户管理员，manager=店长，cashier=收银员）。"""
 
     __tablename__ = "users"
 
@@ -26,7 +26,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     # 姓名
     name: Mapped[str] = mapped_column(String(50), nullable=False)
-    # 角色：admin=管理员，manager=店长，cashier=收银员
+    # 角色：super=平台超级管理员（跨租户管理），admin=租户管理员，manager=店长，cashier=收银员
     role: Mapped[str] = mapped_column(String(10), default="cashier")
     # 是否启用
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)

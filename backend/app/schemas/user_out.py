@@ -18,5 +18,5 @@ class UserOut(BaseModel):
     username: str
     # 姓名
     name: str
-    # 角色：admin=管理员，manager=店长，cashier=收银员
+    # 角色：super=平台超级管理员，admin=租户管理员，manager=店长，cashier=收银员
     role: str

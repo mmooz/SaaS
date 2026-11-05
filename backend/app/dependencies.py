@@ -38,6 +38,17 @@ def get_tenant_id(
     return payload["tenant_id"]
 
 
+def get_super_admin(user: User = Depends(get_current_user)) -> User:
+    """要求当前登录用户为平台超级管理员。
+
+    :param user: 当前登录用户
+    :return: 超级管理员用户 ORM 对象
+    """
+    if user.role != "super":
+        raise HTTPException(status_code=403, detail="仅平台超级管理员可执行该操作")
+    return user
+
+
 def get_store_id(
     x_store_id: int | None = Header(None, alias="X-Store-Id"),
     db: Session = Depends(get_db),
