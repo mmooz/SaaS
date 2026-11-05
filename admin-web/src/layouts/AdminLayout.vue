@@ -81,6 +81,7 @@ import {
   Odometer, Box, FolderOpened, Avatar, PriceTag, SetUp, DataAnalysis,
   Setting, ArrowDown,
 } from '@element-plus/icons-vue'
+import { clearAdminToken } from '../api'
 
 const route = useRoute()
 const router = useRouter()
