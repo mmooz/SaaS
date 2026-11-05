@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import AdminLayout from '../layouts/AdminLayout.vue'
+import { getAdminToken } from '../api'
 
 // 路由表：Web 后台管理各页面
 const routes = [
@@ -31,9 +32,13 @@ const router = createRouter({
   routes,
 })
 
-// 路由守卫：未登录跳转登录页（页面设计阶段保留可配置跳转）
+// 路由守卫：未登录跳转登录页，已登录访问登录页则回首页
 router.beforeEach((to) => {
   document.title = `${to.meta.title || ''} · 鲜衡云`
+  // 无令牌时除登录页外一律跳登录
+  if (to.path !== '/login' && !getAdminToken()) return '/login'
+  // 已有令牌时访问登录页直接回仪表盘
+  if (to.path === '/login' && getAdminToken()) return '/dashboard'
   return true
 })
 
