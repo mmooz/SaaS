@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, categories, inventory, members, orders, products, promotions, reports, sync
+from app.api import auth, categories, inventory, members, orders, products, promotions, reports, shifts, sync
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app import models  # 导入模型模块，确保建表时注册所有表
@@ -53,6 +53,7 @@ app.include_router(members.router)
 app.include_router(promotions.router)
 app.include_router(inventory.router)
 app.include_router(reports.router)
+app.include_router(shifts.router)
 app.include_router(sync.router)
 
 
