@@ -3,6 +3,32 @@
 
 const BASE_URL = 'http://127.0.0.1:8000'
 
+// 登录令牌在 localStorage 中的键名
+const TOKEN_KEY = 'pos_token'
+
+/**
+ * 保存登录令牌（登录成功后调用）
+ * @param {string} token 访问令牌
+ */
+export function setAuthToken(token) {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+/**
+ * 读取本地登录令牌
+ * @returns {string} 令牌，未登录时为空字符串
+ */
+export function getAuthToken() {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+/**
+ * 清除本地登录令牌（退出登录时调用）
+ */
+export function clearAuthToken() {
+  localStorage.removeItem(TOKEN_KEY)
+}
+
 /**
  * 发起 JSON 请求
  * @param {string} path 接口路径
@@ -10,8 +36,13 @@ const BASE_URL = 'http://127.0.0.1:8000'
  * @returns {Promise<any>} 解析后的响应数据
  */
 async function request(path, options = {}) {
+  const token = getAuthToken()
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      // 已登录时自动携带令牌，供后端识别当前用户
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...options,
   })
   if (!res.ok) {
@@ -20,6 +51,19 @@ async function request(path, options = {}) {
   }
   if (res.status === 204) return null
   return res.json()
+}
+
+/**
+ * 账号密码登录
+ * @param {string} username 登录账号（工号）
+ * @param {string} password 登录密码
+ * @returns {Promise<{access_token:string, token_type:string, expires_in:number, user:object}>} 登录结果
+ */
+export function login(username, password) {
+  return request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
 }
 
 /**
