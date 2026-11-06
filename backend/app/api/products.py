@@ -16,9 +16,29 @@ from app.schemas.product_query import ProductQuery
 from app.schemas.product_update import ProductUpdate
 from app.services.excel_service import excel_service
 from app.services.operation_log_service import OperationLogService
+from app.services.product_stock_service import ProductStockService
 
 # 商品路由
 router = APIRouter(prefix="/api/products", tags=["商品管理"])
+
+
+def fill_store_stock(
+    db: Session, items: list[ProductOut], products: list[Product], store_id: int
+) -> list[ProductOut]:
+    """用当前门店库存覆盖商品响应中的库存字段（商品档案本身不再持有业务库存）。
+
+    :param db: 数据库会话
+    :param items: 商品响应模型列表
+    :param products: 商品 ORM 列表（与 items 一一对应）
+    :param store_id: 当前门店 ID
+    :return: 填充后的响应模型列表
+    """
+    stocks = ProductStockService.get_map(db, [p.id for p in products], store_id)
+    for out, product in zip(items, products):
+        row = stocks.get(product.id)
+        out.stock = round(row.stock or 0, 3) if row else 0
+        out.safety_stock = (row.safety_stock or 0) if row else 0
+    return items
 
 
 def apply_filters(stmt, query: ProductQuery):
@@ -41,11 +61,12 @@ def apply_filters(stmt, query: ProductQuery):
 def list_products(
     query: ProductQuery = Depends(),
     db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """分页查询商品列表（支持关键字/分类/计价方式筛选，已删除商品不返回）。"""
+    """分页查询商品列表（租户级共享，库存取当前门店，已删除商品不返回）。"""
     base = apply_filters(
-        select(Product).where(Product.store_id == store_id, Product.deleted.is_(False)), query
+        select(Product).where(Product.tenant_id == tenant_id, Product.deleted.is_(False)), query
     )
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     stmt = (
@@ -58,6 +79,7 @@ def list_products(
     # 填充分类名称
     for out, product in zip(items, products):
         out.category_name = product.category.name if product.category else None
+    fill_store_stock(db, items, list(products), store_id)
     return {"total": total, "page": query.page, "page_size": query.page_size, "items": items}
 
 
@@ -74,10 +96,12 @@ def download_import_template():
 
 @router.get("/export")
 def export_products(
-    db: Session = Depends(get_db), store_id: int = Depends(get_store_id)
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
 ):
-    """导出当前门店全部商品为 Excel 文件。"""
-    buffer = excel_service.export_products(db, store_id)
+    """导出本租户全部商品（库存取当前门店）为 Excel 文件。"""
+    buffer = excel_service.export_products(db, tenant_id, store_id)
     return Response(
         content=buffer.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -94,8 +118,8 @@ def batch_adjust_price(
     _user: User = Depends(get_manager_user),
 ):
     """批量改价：按分类/商品范围 + 比例/固定值调整，并记录价格历史。"""
-    # 确定改价范围（限定当前门店，已删除商品不参与改价）
-    stmt = select(Product).where(Product.store_id == store_id, Product.deleted.is_(False))
+    # 确定改价范围（租户级共享商品，已删除商品不参与改价）
+    stmt = select(Product).where(Product.tenant_id == tenant_id, Product.deleted.is_(False))
     if data.mode == "category":
         if data.category_id is None:
             raise HTTPException(status_code=422, detail="按分类改价需提供分类 ID")
@@ -160,7 +184,7 @@ def create_product(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """新增商品（同租户条码唯一）。"""
+    """新增商品（同租户条码唯一，库存写入当前门店）。"""
     exists = db.scalar(
         select(Product).where(
             Product.barcode == data.barcode, Product.tenant_id == tenant_id
@@ -168,36 +192,51 @@ def create_product(
     )
     if exists:
         raise HTTPException(status_code=409, detail="条码已存在")
+    # 库存字段不落在商品档案上，单独写入当前门店库存表
     product = Product(
-        **data.model_dump(exclude={"store_id"}),
+        **data.model_dump(exclude={"store_id", "stock", "safety_stock"}),
         tenant_id=tenant_id,
         store_id=store_id,
+        stock=0,
+        safety_stock=0,
     )
     db.add(product)
     db.flush()
+    ProductStockService.apply(
+        db,
+        product,
+        store_id,
+        stock=data.stock,
+        safety_stock=data.safety_stock,
+    )
     OperationLogService.record(
         db, "新增商品", f"新增商品 {product.name}（{product.barcode}）", tenant_id=tenant_id
     )
     db.commit()
     db.refresh(product)
-    return product
+    out = ProductOut.model_validate(product)
+    fill_store_stock(db, [out], [product], store_id)
+    return out
 
 
 @router.get("/{product_id}", response_model=ProductOut)
 def get_product(
     product_id: int,
     db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """获取商品详情（已删除商品视为不存在）。"""
+    """获取商品详情（租户级共享，库存取当前门店，已删除商品视为不存在）。"""
     product = db.scalar(
         select(Product).where(
-            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+            Product.id == product_id, Product.tenant_id == tenant_id, Product.deleted.is_(False)
         )
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
-    return product
+    out = ProductOut.model_validate(product)
+    fill_store_stock(db, [out], [product], store_id)
+    return out
 
 
 @router.put("/{product_id}", response_model=ProductOut)
@@ -209,10 +248,10 @@ def update_product(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """更新商品（仅更新传入字段，已删除商品不可编辑）。"""
+    """更新商品（租户级共享，仅更新传入字段，已删除商品不可编辑）。"""
     product = db.scalar(
         select(Product).where(
-            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+            Product.id == product_id, Product.tenant_id == tenant_id, Product.deleted.is_(False)
         )
     )
     if not product:
@@ -230,7 +269,11 @@ def update_product(
             raise HTTPException(status_code=409, detail="条码已被其他商品使用")
     # 记录价格变更历史
     old_price = product.price
-    for key, value in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    # 库存与安全库存属于当前门店，不写回商品档案
+    stock = payload.pop("stock", None)
+    safety_stock = payload.pop("safety_stock", None)
+    for key, value in payload.items():
         setattr(product, key, value)
     if product.price != old_price:
         db.add(
@@ -241,9 +284,15 @@ def update_product(
                 new_price=product.price,
             )
         )
+    if stock is not None or safety_stock is not None:
+        ProductStockService.apply(
+            db, product, store_id, stock=stock, safety_stock=safety_stock
+        )
     db.commit()
     db.refresh(product)
-    return product
+    out = ProductOut.model_validate(product)
+    fill_store_stock(db, [out], [product], store_id)
+    return out
 
 
 @router.delete("/{product_id}")
@@ -254,10 +303,10 @@ def delete_product(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """删除商品（软删除：仅打标记并停用，保留数据用于历史追溯）。"""
+    """删除商品（租户级共享，软删除：仅打标记并停用，保留数据用于历史追溯）。"""
     product = db.scalar(
         select(Product).where(
-            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+            Product.id == product_id, Product.tenant_id == tenant_id, Product.deleted.is_(False)
         )
     )
     if not product:
