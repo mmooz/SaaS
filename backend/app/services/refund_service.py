@@ -81,6 +81,7 @@ class RefundService:
         db.add(
             MemberTransaction(
                 tenant_id=tenant_id,
+                store_id=order.store_id,
                 member_id=member.id,
                 type="refund",
                 amount=amount,
