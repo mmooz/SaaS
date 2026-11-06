@@ -461,7 +461,8 @@ export const usePosStore = defineStore('pos', {
             pendingShifts.map((shift) => ({
               id: shift.shift_id,
               cashier_id: shift.cashier_id,
-              store_id: 1,
+              // 使用当前登录门店，避免补传数据落到错误门店
+              store_id: getCurrentStore() || null,
               start_at: shift.start_at,
               end_at: shift.end_at,
               base_cash: Number(shift.base_cash) || 0,
