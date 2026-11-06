@@ -8,8 +8,8 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import Promotion
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import Promotion, User
 from app.schemas.promotion_create import PromotionCreate
 from app.schemas.promotion_out import PromotionOut
 from app.schemas.promotion_update import PromotionUpdate
@@ -115,6 +115,7 @@ def create_promotion(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """新增促销规则。"""
     # params/product_ids/category_ids 需序列化为 JSON 字符串存储
@@ -142,6 +143,7 @@ def update_promotion(
     data: PromotionUpdate,
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """更新促销规则（仅修改传入字段）。"""
     promo = _get_promotion(db, promotion_id, store_id)
@@ -171,6 +173,7 @@ def delete_promotion(
     promotion_id: int,
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """删除促销规则。"""
     promo = _get_promotion(db, promotion_id, store_id)

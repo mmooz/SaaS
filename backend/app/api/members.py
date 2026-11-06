@@ -7,8 +7,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import Member, MemberTransaction, Order
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import Member, MemberTransaction, Order, User
 from app.schemas.member_consume import MemberConsume
 from app.schemas.member_create import MemberCreate
 from app.schemas.member_out import MemberOut
@@ -43,6 +43,7 @@ def create_member(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """会员建档：同租户手机号已存在则返回 409。"""
     # 手机号唯一性校验（限定当前租户）
@@ -240,6 +241,7 @@ def update_member(
     data: MemberUpdate,
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """更新会员姓名或等级（仅修改传入字段）。"""
     member = _get_member(db, member_id, store_id)
@@ -325,6 +327,7 @@ def adjust_points(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """手工调整会员积分（正增负减，扣减后不得为负）。"""
     member = _get_member(db, member_id, store_id)

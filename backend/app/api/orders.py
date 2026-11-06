@@ -7,8 +7,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import Member, Order, OrderItem, RefundItem, RefundRecord
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import Member, Order, OrderItem, RefundItem, RefundRecord, User
 from app.schemas.order_create import OrderCreate
 from app.schemas.order_out import OrderOut
 from app.schemas.refund_create import RefundCreate
@@ -223,6 +223,7 @@ def refund_order(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """订单退款/退货：整单退款或按明细退货，自动回滚库存与储值余额。"""
     order = db.scalar(

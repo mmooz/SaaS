@@ -5,8 +5,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import InventoryMovement, Product
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import InventoryMovement, Product, User
 from app.schemas.inventory_breakage import InventoryBreakage
 from app.schemas.inventory_inbound import InventoryInbound
 from app.schemas.inventory_movement_out import InventoryMovementOut
@@ -114,6 +114,7 @@ def inbound(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """采购入库：增加库存、可选更新进价并写入入库流水。"""
     product = _get_product(db, data.product_id, store_id)
@@ -134,6 +135,7 @@ def stocktake(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """盘点：以实盘数覆盖库存并记录差异流水。"""
     product = _get_product(db, data.product_id, store_id)
@@ -155,6 +157,7 @@ def breakage(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """报损：扣减库存并写入报损流水，库存不足时拒绝。"""
     product = _get_product(db, data.product_id, store_id)

@@ -6,8 +6,8 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import Product, ProductPriceHistory
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import Product, ProductPriceHistory, User
 from app.schemas.batch_price_request import BatchPriceRequest
 from app.schemas.import_result import ImportResult
 from app.schemas.product_create import ProductCreate
@@ -91,6 +91,7 @@ def batch_adjust_price(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """批量改价：按分类/商品范围 + 比例/固定值调整，并记录价格历史。"""
     # 确定改价范围（限定当前门店，已删除商品不参与改价）
@@ -141,6 +142,7 @@ async def import_products(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """上传 Excel 批量导入/更新商品。"""
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
@@ -156,6 +158,7 @@ def create_product(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """新增商品（同租户条码唯一）。"""
     exists = db.scalar(
@@ -204,6 +207,7 @@ def update_product(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """更新商品（仅更新传入字段，已删除商品不可编辑）。"""
     product = db.scalar(
@@ -248,6 +252,7 @@ def delete_product(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """删除商品（软删除：仅打标记并停用，保留数据用于历史追溯）。"""
     product = db.scalar(

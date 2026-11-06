@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import Category, Product
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import Category, Product, User
 from app.schemas.category_create import CategoryCreate
 from app.schemas.category_out import CategoryOut
 from app.schemas.category_update import CategoryUpdate
@@ -64,6 +64,7 @@ def create_category(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """新增分类。"""
     # 校验上级分类存在且属于当前门店
@@ -92,6 +93,7 @@ def update_category(
     data: CategoryUpdate,
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """更新分类（仅更新传入字段）。"""
     category = db.scalar(
@@ -111,6 +113,7 @@ def delete_category(
     category_id: int,
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """删除分类（存在子分类或商品时禁止删除）。"""
     category = db.scalar(
