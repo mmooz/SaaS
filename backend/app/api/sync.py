@@ -26,8 +26,10 @@ def sync_products(
 
     首次同步不传 after，返回全量数据；后续传上次同步时间获取增量。
     """
-    # 商品：按更新时间过滤（SQLite 使用 naive datetime 比较）
-    product_stmt = select(Product).where(Product.store_id == store_id)
+    # 商品：按更新时间过滤（SQLite 使用 naive datetime 比较），已删除商品不下发
+    product_stmt = select(Product).where(
+        Product.store_id == store_id, Product.deleted.is_(False)
+    )
     if after:
         product_stmt = product_stmt.where(Product.updated_at > after)
     products = db.scalars(product_stmt.order_by(Product.id)).all()

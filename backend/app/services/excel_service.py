@@ -173,6 +173,9 @@ class ExcelService:
         # 条码已属于同租户其他门店，拒绝导入该行，避免串改他店商品
         if product is not None and product.store_id != store_id:
             raise ValueError(f"条码 {barcode} 已被同租户其他门店的商品占用")
+        # 条码对应商品已软删除，保留数据不能再被导入覆盖
+        if product is not None and product.deleted:
+            raise ValueError(f"条码 {barcode} 对应的商品已删除，请使用新条码或先恢复商品")
 
         if product:
             # 更新已有商品
@@ -229,7 +232,7 @@ class ExcelService:
 
         products = db.scalars(
             select(Product)
-            .where(Product.store_id == store_id)
+            .where(Product.store_id == store_id, Product.deleted.is_(False))
             .order_by(Product.category_id, Product.id)
         ).all()
         for p in products:

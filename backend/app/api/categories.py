@@ -127,7 +127,9 @@ def delete_category(
         raise HTTPException(status_code=409, detail="该分类存在子分类，请先处理子分类")
     product_count = db.scalar(
         select(Product.id).where(
-            Product.category_id == category_id, Product.store_id == store_id
+            Product.category_id == category_id,
+            Product.store_id == store_id,
+            Product.deleted.is_(False),
         )
     )
     if product_count:

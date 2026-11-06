@@ -26,7 +26,9 @@ def _get_product(db: Session, product_id: int, store_id: int) -> Product:
     :return: 商品 ORM 对象
     """
     product = db.scalar(
-        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+        select(Product).where(
+            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+        )
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
@@ -64,8 +66,8 @@ def list_inventory(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """分页查询库存：支持关键字/分类筛选，low_only 仅看预警商品（当前门店）。"""
-    stmt = select(Product).where(Product.store_id == store_id)
+    """分页查询库存：支持关键字/分类筛选，low_only 仅看预警商品（当前门店，不含已删除商品）。"""
+    stmt = select(Product).where(Product.store_id == store_id, Product.deleted.is_(False))
     if keyword:
         like = f"%{keyword.strip()}%"
         stmt = stmt.where(or_(Product.name.like(like), Product.barcode.like(like)))
@@ -93,11 +95,12 @@ def list_alerts(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """库存预警：返回已售罄或低于安全库存的商品清单（当前门店）。"""
+    """库存预警：返回已售罄或低于安全库存的商品清单（当前门店，不含已删除商品）。"""
     rows = db.scalars(
         select(Product)
         .where(
             Product.store_id == store_id,
+            Product.deleted.is_(False),
             or_(Product.stock <= 0, (Product.safety_stock > 0) & (Product.stock < Product.safety_stock)),
         )
         .order_by(Product.stock)
