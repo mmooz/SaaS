@@ -70,7 +70,7 @@
         <el-table-column label="进价(元)" width="90" align="right">
           <template #default="{ row }"><span class="num">{{ row.cost.toFixed(2) }}</span></template>
         </el-table-column>
-        <el-table-column label="库存" width="100" align="right">
+        <el-table-column label="本店库存" width="100" align="right">
           <template #default="{ row }">
             <span class="num">{{ row.stock }}<span class="unit">{{ row.unit }}</span></span>
           </template>
@@ -169,12 +169,12 @@
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="库存" prop="stock">
+            <el-form-item label="本店库存" prop="stock">
               <el-input-number v-model="form.stock" :min="0" :precision="1" :step="0.5" style="width: 100%" />
             </el-form-item>
           </el-col>
           <el-col :span="8">
-            <el-form-item label="安全库存" prop="safetyStock">
+            <el-form-item label="本店安全库存" prop="safetyStock">
               <el-input-number v-model="form.safetyStock" :min="0" :precision="1" style="width: 100%" />
             </el-form-item>
           </el-col>
