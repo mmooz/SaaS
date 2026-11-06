@@ -1,6 +1,7 @@
 // 后台管理 API 封装：统一请求后端 FastAPI 服务
 
-const BASE_URL = 'http://127.0.0.1:8000'
+// 后端服务地址：优先读取构建环境变量，缺省回退本地开发地址
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
 // 后台登录令牌缓存键
 const TOKEN_KEY = 'admin_token'
 // 当前门店 ID 缓存键
@@ -143,6 +144,16 @@ async function request(path, options = {}) {
       ...(options.headers || {}),
     },
   })
+  // 令牌失效统一处理：清除登录态并回到登录页，避免继续请求
+  if (res.status === 401 && token) {
+    clearAdminToken()
+    clearStoreInfo()
+    clearUserInfo()
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    throw new Error('登录已过期，请重新登录')
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.detail || `请求失败(${res.status})`)
@@ -169,6 +180,16 @@ async function upload(path, file) {
     headers,
     body: form,
   })
+  // 上传接口同样统一处理令牌失效
+  if (res.status === 401 && token) {
+    clearAdminToken()
+    clearStoreInfo()
+    clearUserInfo()
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    throw new Error('登录已过期，请重新登录')
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
     throw new Error(body.detail || `上传失败(${res.status})`)
