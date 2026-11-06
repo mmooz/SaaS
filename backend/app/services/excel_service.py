@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Category, Product
 from app.schemas.import_result import ImportResult, ImportRowError
+from app.services.product_stock_service import ProductStockService
 
 # 商品 Excel 列定义
 COLUMNS = [
@@ -162,7 +163,7 @@ class ExcelService:
         # 分类：按名称查找或自动创建（支持"一级/二级"路径）
         category_id = self._resolve_category(db, category_name, category_cache, tenant_id, store_id)
 
-        # 按条码查找已有商品（同租户内唯一，使用缓存避免重复查询）
+        # 按条码查找已有商品（租户级共享，同租户内唯一，使用缓存避免重复查询）
         product = barcode_cache.get(barcode)
         if product is None:
             product = db.scalar(
@@ -170,15 +171,12 @@ class ExcelService:
                     Product.barcode == barcode, Product.tenant_id == tenant_id
                 )
             )
-        # 条码已属于同租户其他门店，拒绝导入该行，避免串改他店商品
-        if product is not None and product.store_id != store_id:
-            raise ValueError(f"条码 {barcode} 已被同租户其他门店的商品占用")
         # 条码对应商品已软删除，保留数据不能再被导入覆盖
         if product is not None and product.deleted:
             raise ValueError(f"条码 {barcode} 对应的商品已删除，请使用新条码或先恢复商品")
 
         if product:
-            # 更新已有商品
+            # 更新已有商品（库存写入当前导入门店，不落在商品档案上）
             product.name = name
             product.pinyin = pinyin or None
             product.category_id = category_id
@@ -188,8 +186,6 @@ class ExcelService:
             product.member_price = member_price
             product.cost_price = cost_price
             product.shelf_life_days = shelf_life
-            product.stock = stock
-            product.safety_stock = safety_stock
             product.enabled = enabled
         else:
             # 新建商品
@@ -206,20 +202,25 @@ class ExcelService:
                 member_price=member_price,
                 cost_price=cost_price,
                 shelf_life_days=shelf_life,
-                stock=stock,
-                safety_stock=safety_stock,
+                stock=0,
+                safety_stock=0,
                 enabled=enabled,
             )
             db.add(product)
             db.flush()  # 立即获取自增 ID，确保统计 created/updated 准确
+        # 库存/安全库存写入当前门店库存表
+        ProductStockService.apply(
+            db, product, store_id, stock=stock, safety_stock=safety_stock
+        )
         barcode_cache[barcode] = product
         return product
 
-    def export_products(self, db: Session, store_id: int) -> BytesIO:
-        """导出指定门店全部商品为 Excel，返回字节流。
+    def export_products(self, db: Session, tenant_id: int, store_id: int) -> BytesIO:
+        """导出本租户全部商品为 Excel（库存取当前门店），返回字节流。
 
         :param db: 数据库会话
-        :param store_id: 门店 ID
+        :param tenant_id: 所属租户 ID
+        :param store_id: 当前门店 ID（用于取门店库存）
         :return: Excel 字节流
         """
         wb = Workbook()
@@ -232,10 +233,12 @@ class ExcelService:
 
         products = db.scalars(
             select(Product)
-            .where(Product.store_id == store_id, Product.deleted.is_(False))
+            .where(Product.tenant_id == tenant_id, Product.deleted.is_(False))
             .order_by(Product.category_id, Product.id)
         ).all()
+        stocks = ProductStockService.get_map(db, [p.id for p in products], store_id)
         for p in products:
+            row = stocks.get(p.id)
             ws.append(
                 [
                     p.barcode,
@@ -248,8 +251,8 @@ class ExcelService:
                     p.member_price or "",
                     p.cost_price or "",
                     p.shelf_life_days or "",
-                    p.stock,
-                    p.safety_stock,
+                    round(row.stock or 0, 3) if row else 0,
+                    (row.safety_stock or 0) if row else 0,
                     "是" if p.enabled else "否",
                 ]
             )
@@ -290,13 +293,13 @@ class ExcelService:
         tenant_id: int,
         store_id: int,
     ) -> int | None:
-        """按名称解析分类（支持 一级/二级 路径），不存在则自动创建（限定当前门店）。
+        """按名称解析分类（支持 一级/二级 路径），不存在则自动创建（租户级共享）。
 
         :param db: 数据库会话
         :param category_name: 分类名称路径
         :param category_cache: 分类缓存
         :param tenant_id: 所属租户 ID
-        :param store_id: 所属门店 ID
+        :param store_id: 创建分类时记录的归属门店 ID
         :return: 分类 ID
         """
         if not category_name:
@@ -318,7 +321,7 @@ class ExcelService:
                 select(Category).where(
                     Category.name == part,
                     Category.parent_id == parent_id,
-                    Category.store_id == store_id,
+                    Category.tenant_id == tenant_id,
                 )
             )
             if category is None:
