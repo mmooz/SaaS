@@ -205,7 +205,7 @@
         <div class="stat-card">
           <div class="stat-icon" style="--c: var(--brand)"><el-icon :size="20"><Avatar /></el-icon></div>
           <div>
-            <div class="stat-label">会员总数</div>
+            <div class="stat-label">会员总数（全租户）</div>
             <div class="stat-value num">{{ memberReport.member_total }}</div>
             <div class="stat-trend up">区间新增 {{ memberReport.new_in_range }}</div>
           </div>
@@ -213,7 +213,7 @@
         <div class="stat-card">
           <div class="stat-icon" style="--c: var(--accent)"><el-icon :size="20"><Money /></el-icon></div>
           <div>
-            <div class="stat-label">会员消费额</div>
+            <div class="stat-label">会员消费额（本店）</div>
             <div class="stat-value num">¥ {{ memberReport.member_sales.toFixed(2) }}</div>
             <div class="stat-trend">占销售 {{ memberReport.member_ratio }}%</div>
           </div>
@@ -221,7 +221,7 @@
         <div class="stat-card">
           <div class="stat-icon" style="--c: var(--info)"><el-icon :size="20"><Tickets /></el-icon></div>
           <div>
-            <div class="stat-label">会员消费笔数</div>
+            <div class="stat-label">会员消费笔数（本店）</div>
             <div class="stat-value num">{{ memberReport.member_orders }}</div>
             <div class="stat-trend">会员订单合计</div>
           </div>
