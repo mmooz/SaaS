@@ -256,48 +256,23 @@ const logout = () => {
   router.push('/login')
 }
 
-/* ---------- 演示兜底数据（后端无数据时使用） ---------- */
-const fallbackProducts = [
-  { id: 1, name: '上海青', price: 4.8, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'shq' },
-  { id: 2, name: '西红柿', price: 6.5, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'xhs' },
-  { id: 3, name: '黄瓜', price: 5.2, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'hg' },
-  { id: 4, name: '土豆', price: 3.8, unit: 'kg', pricingMode: 'weigh', cate: '蔬菜', pinyin: 'td' },
-  { id: 5, name: '蜜桔', price: 7.9, unit: 'kg', pricingMode: 'weigh', cate: '水果', pinyin: 'mj' },
-  { id: 6, name: '红富士苹果', price: 9.8, unit: 'kg', pricingMode: 'weigh', cate: '水果', pinyin: 'hfs' },
-  { id: 7, name: '香蕉', price: 5.6, unit: 'kg', pricingMode: 'weigh', cate: '水果', pinyin: 'xj' },
-  { id: 8, name: '五花肉', price: 28.8, unit: 'kg', pricingMode: 'weigh', cate: '肉类', pinyin: 'whr' },
-  { id: 9, name: '前腿肉', price: 25.6, unit: 'kg', pricingMode: 'weigh', cate: '肉类', pinyin: 'qtr' },
-  { id: 10, name: '鸡胸肉', price: 21.5, unit: 'kg', pricingMode: 'weigh', cate: '肉类', pinyin: 'jxr' },
-  { id: 11, name: '草鱼', price: 15.8, unit: 'kg', pricingMode: 'weigh', cate: '水产', pinyin: 'cy' },
-  { id: 12, name: '基围虾', price: 42.0, unit: 'kg', pricingMode: 'weigh', cate: '水产', pinyin: 'jwx' },
-  { id: 13, name: '东北大米', price: 5.5, unit: 'kg', pricingMode: 'weigh', cate: '粮油副食', pinyin: 'dbdm' },
-  { id: 14, name: '鲜鸡蛋(盒)', price: 13.8, unit: '盒', pricingMode: 'count', cate: '粮油副食', pinyin: 'xjd' },
-  { id: 15, name: '金龙鱼花生油', price: 89.9, unit: '瓶', pricingMode: 'count', cate: '粮油副食', pinyin: 'jly' },
-  { id: 16, name: '挂面(袋)', price: 6.9, unit: '袋', pricingMode: 'count', cate: '粮油副食', pinyin: 'gm' },
-]
+/* ---------- 商品来源：仅使用后端同步数据，同步为空时展示空态 ---------- */
+const products = computed(() =>
+  store.products.map((p) => ({
+    id: p.id,
+    name: p.name,
+    price: p.price,
+    unit: p.unit,
+    pricingMode: p.pricing_mode,
+    memberPrice: p.member_price ?? null,
+    categoryId: p.category_id ?? null,
+    pinyin: p.pinyin || '',
+    cate: store.categoryName(p.category_id) || '',
+    barcode: p.barcode,
+  })),
+)
 
-/* ---------- 商品来源：优先后端同步数据，空则用演示数据 ---------- */
-const products = computed(() => {
-  if (store.products.length) {
-    // 后端商品字段转换：pricing_mode -> pricingMode，member_price -> memberPrice
-    return store.products.map((p) => ({
-      id: p.id,
-      name: p.name,
-      price: p.price,
-      unit: p.unit,
-      pricingMode: p.pricing_mode,
-      memberPrice: p.member_price ?? null,
-      categoryId: p.category_id ?? null,
-      pinyin: p.pinyin || '',
-      cate: store.categoryName(p.category_id) || '',
-      barcode: p.barcode,
-    }))
-  }
-  // 演示数据统一按零售价 95 折生成会员价
-  return fallbackProducts.map((p) => ({ ...p, memberPrice: +(p.price * 0.95).toFixed(2) }))
-})
-
-// 分类页签：'全部' + 后端一级分类名（无数据时用演示数据分类）
+// 分类页签：'全部' + 后端一级分类名
 const categoryTabs = computed(() => {
   const names = new Set(['全部'])
   products.value.forEach((p) => p.cate && names.add(p.cate))
