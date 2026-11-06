@@ -682,6 +682,84 @@ export function updateTenant(id, data) {
   return request(`/api/tenants/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
 }
 
+/* ---------------- 门店管理 ---------------- */
+
+/**
+ * 查询当前租户的门店列表
+ * @returns {Promise<Array<object>>} 门店列表（含启用状态）
+ */
+export function fetchStores() {
+  return request('/api/stores')
+}
+
+/**
+ * 新增门店
+ * @param {object} data { name, address, phone, enabled }
+ * @returns {Promise<object>} 门店信息
+ */
+export function createStore(data) {
+  return request('/api/stores', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: data.name,
+      address: data.address || null,
+      phone: data.phone || null,
+      enabled: data.enabled ?? true,
+    }),
+  })
+}
+
+/**
+ * 更新门店信息
+ * @param {number} id 门店 ID
+ * @param {object} data { name, address, phone, enabled }
+ * @returns {Promise<object>} 门店信息
+ */
+export function updateStore(id, data) {
+  return request(`/api/stores/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })
+}
+
+/**
+ * 删除门店
+ * @param {number} id 门店 ID
+ * @returns {Promise<void>}
+ */
+export function deleteStore(id) {
+  return request(`/api/stores/${id}`, { method: 'DELETE' })
+}
+
+/**
+ * 查询门店已授权员工
+ * @param {number} storeId 门店 ID
+ * @returns {Promise<Array<object>>} 员工列表 { id, username, name, role }
+ */
+export function fetchStoreUsers(storeId) {
+  return request(`/api/stores/${storeId}/users`)
+}
+
+/**
+ * 授权员工访问门店
+ * @param {number} storeId 门店 ID
+ * @param {number} userId 用户 ID
+ * @returns {Promise<object>} 授权结果
+ */
+export function grantStoreAccess(storeId, userId) {
+  return request(`/api/stores/${storeId}/users/${userId}`, { method: 'POST' })
+}
+
+/**
+ * 撤销员工的门店访问权限
+ * @param {number} storeId 门店 ID
+ * @param {number} userId 用户 ID
+ * @returns {Promise<void>}
+ */
+export function revokeStoreAccess(storeId, userId) {
+  return request(`/api/stores/${storeId}/users/${userId}`, { method: 'DELETE' })
+}
+
 /* ---------------- 订单 ---------------- */
 
 /**
