@@ -60,6 +60,8 @@ class Product(Base):
     safety_stock: Mapped[float] = mapped_column(Float, default=0)
     # 是否启用（停用后收银端不可售）
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 是否已删除（软删除标记，删除后不再参与任何业务查询，数据保留可追溯）
+    deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False)
     # 所属租户 ID
     tenant_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
