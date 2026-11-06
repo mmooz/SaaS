@@ -5,9 +5,9 @@
       <el-menu :default-active="activeMenu" class="settings-menu" @select="(idx) => (activeMenu = idx)">
         <el-menu-item index="store"><el-icon><Shop /></el-icon><span>门店信息</span></el-menu-item>
         <el-menu-item index="cashier"><el-icon><Operation /></el-icon><span>收银参数</span></el-menu-item>
-        <el-menu-item index="users"><el-icon><User /></el-icon><span>用户权限</span></el-menu-item>
+        <el-menu-item index="users" v-if="isAdmin"><el-icon><User /></el-icon><span>用户权限</span></el-menu-item>
         <el-menu-item index="logs"><el-icon><Document /></el-icon><span>操作日志</span></el-menu-item>
-        <el-menu-item index="backup"><el-icon><FolderChecked /></el-icon><span>数据备份</span></el-menu-item>
+        <el-menu-item index="backup" v-if="isAdmin"><el-icon><FolderChecked /></el-icon><span>数据备份</span></el-menu-item>
       </el-menu>
 
       <!-- 右侧内容区 -->
@@ -234,7 +234,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, Shop, Operation, User, Document, FolderChecked, InfoFilled } from '@element-plus/icons-vue'
 import {
@@ -248,10 +248,14 @@ import {
   fetchBackups,
   createBackup,
   backupDownloadUrl,
+  getUserInfo,
 } from '../api'
 
 // 当前设置子菜单
 const activeMenu = ref('store')
+
+// 是否租户管理员：用户权限与备份入口仅管理员可见（与后端角色校验一致）
+const isAdmin = computed(() => (getUserInfo() || {}).role === 'admin')
 
 // 角色代码 -> 中文名称
 const ROLE_NAMES = { admin: '管理员', manager: '店长', cashier: '收银员' }
