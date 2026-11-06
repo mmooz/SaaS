@@ -4,25 +4,24 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import InventoryMovement, Product
+from app.services.product_stock_service import ProductStockService
 
 
 class InventoryService:
-    """库存业务服务（静态方法，供 API 与订单流程复用）。"""
+    """库存业务服务（静态方法，供 API 与订单流程复用）。
+
+    库存按门店隔离存放于 product_stocks 表，本服务所有变动都必须带门店 ID。
+    """
 
     @staticmethod
-    def status(product: Product) -> str:
+    def status(stock: float | None, safety_stock: float | None) -> str:
         """判断库存状态：ok=充足，low=低于安全库存，out=已售罄。
 
-        :param product: 商品 ORM 对象
+        :param stock: 当前库存
+        :param safety_stock: 安全库存
         :return: 状态字符串
         """
-        stock = product.stock or 0
-        safety = product.safety_stock or 0
-        if stock <= 0:
-            return "out"
-        if safety > 0 and stock < safety:
-            return "low"
-        return "ok"
+        return ProductStockService.status(stock, safety_stock)
 
     @staticmethod
     def record(
@@ -30,20 +29,22 @@ class InventoryService:
         product: Product,
         movement_type: str,
         delta: float,
+        store_id: int,
         ref_id: int | None = None,
         operator_id: int | None = None,
         apply_stock: bool = True,
         tenant_id: int | None = None,
     ) -> InventoryMovement:
-        """写入一条库存流水并按需同步商品库存。
+        """写入一条库存流水并按需同步门店库存。
 
         :param db: 数据库会话
         :param product: 商品 ORM 对象
-        :param movement_type: inbound/sale/stocktake/breakage
+        :param movement_type: inbound/sale/stocktake/breakage/refund
         :param delta: 库存变动量（正增负减）
+        :param store_id: 发生门店 ID（库存按门店隔离）
         :param ref_id: 来源单据 ID
         :param operator_id: 操作人 ID
-        :param apply_stock: 是否同时更新商品库存（盘点时由调用方直接赋值）
+        :param apply_stock: 是否同时更新门店库存（盘点时由调用方直接赋值）
         :param tenant_id: 所属租户 ID（多租户隔离用）
         :return: 库存流水对象
         """
@@ -59,17 +60,17 @@ class InventoryService:
             weight_kg=round(delta, 3) if is_weighed else None,
             ref_id=ref_id,
             operator_id=operator_id,
-            store_id=product.store_id,
+            store_id=store_id,
             synced=True,
         )
         if apply_stock:
-            product.stock = round((product.stock or 0) + delta, 3)
+            ProductStockService.apply(db, product, store_id, delta=delta)
         db.add(movement)
         return movement
 
     @staticmethod
     def deduct_for_order(db: Session, order) -> None:
-        """订单成交后按明细自动扣减库存并写入销售流水。
+        """订单成交后按明细自动扣减门店库存并写入销售流水。
 
         :param db: 数据库会话
         :param order: 订单 ORM 对象（含 items）
@@ -91,6 +92,7 @@ class InventoryService:
                 product,
                 "sale",
                 delta,
+                store_id=order.store_id,
                 ref_id=order.id,
                 operator_id=order.cashier_id,
                 tenant_id=order.tenant_id,
@@ -98,7 +100,7 @@ class InventoryService:
 
     @staticmethod
     def restore_for_refund(db: Session, order, items) -> None:
-        """退款后按退货明细回滚库存并写入退款流水。
+        """退款后按退货明细回滚门店库存并写入退款流水。
 
         :param db: 数据库会话
         :param order: 原订单 ORM 对象
@@ -122,6 +124,7 @@ class InventoryService:
                 product,
                 "refund",
                 delta,
+                store_id=order.store_id,
                 ref_id=order.id,
                 operator_id=order.cashier_id,
                 tenant_id=order.tenant_id,
