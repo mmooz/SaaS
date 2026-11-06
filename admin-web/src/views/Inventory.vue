@@ -14,7 +14,7 @@
     <!-- ========== 1. 库存查询 ========== -->
     <div v-show="activeTab === 'query'" class="card">
       <div class="card-head">
-        <h3>库存列表</h3>
+        <h3>库存列表（当前门店）</h3>
         <div class="head-actions">
           <el-input
             v-model="queryKeyword"
