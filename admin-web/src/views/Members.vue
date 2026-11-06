@@ -194,28 +194,28 @@
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--brand)"><el-icon :size="20"><User /></el-icon></div>
                 <div>
-                  <div class="stat-label">会员总数</div>
+                  <div class="stat-label">会员总数（全租户）</div>
                   <div class="stat-value num">{{ memberStats.total }}</div>
                 </div>
               </div>
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--info)"><el-icon :size="20"><UserFilled /></el-icon></div>
                 <div>
-                  <div class="stat-label">今日新增</div>
+                  <div class="stat-label">今日新增（全租户）</div>
                   <div class="stat-value num">{{ memberStats.new_today }}</div>
                 </div>
               </div>
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--accent)"><el-icon :size="20"><Wallet /></el-icon></div>
                 <div>
-                  <div class="stat-label">储值余额总额</div>
+                  <div class="stat-label">储值余额总额（全租户）</div>
                   <div class="stat-value num">¥{{ Number(memberStats.balance_total).toFixed(2) }}</div>
                 </div>
               </div>
               <div class="stat-card">
                 <div class="stat-icon" style="--c: var(--success)"><el-icon :size="20"><TrendCharts /></el-icon></div>
                 <div>
-                  <div class="stat-label">本月储值收入</div>
+                  <div class="stat-label">本月储值收入（全租户）</div>
                   <div class="stat-value num">¥{{ Number(memberStats.recharge_this_month).toFixed(2) }}</div>
                 </div>
               </div>
