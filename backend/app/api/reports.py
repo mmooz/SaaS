@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id
+from app.dependencies import get_store_id, get_tenant_id
 from app.models import Category, Member, Order, OrderItem, Product
 from app.schemas.report_daily_out import ReportDailyOut
 from app.schemas.report_hourly_out import ReportHourlyOut
@@ -343,21 +343,22 @@ def member_report(
     end: date,
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """会员分析：会员规模、消费贡献、复购率与消费排行（当前门店）。"""
+    """会员分析：会员规模按租户统计，消费贡献与排行按当前门店。"""
     begin, finish = _window(start, end)
     orders = _paid_orders(db, begin, finish, store_id)
 
-    # 全部销售与会员销售
+    # 全部销售与会员销售（按当前门店订单口径）
     total_sales = sum(o.total_amount for o in orders)
     member_orders = [o for o in orders if o.member_id is not None]
     member_sales = sum(o.total_amount for o in member_orders)
 
-    # 会员规模与区间新增（当前门店）
+    # 会员规模与区间新增（租户级共享会员库）
     member_total = int(
         db.scalar(
-            select(func.count()).select_from(Member).where(Member.store_id == store_id)
+            select(func.count()).select_from(Member).where(Member.tenant_id == tenant_id)
         )
         or 0
     )
@@ -365,7 +366,7 @@ def member_report(
         db.scalar(
             select(func.count())
             .select_from(Member)
-            .where(Member.store_id == store_id, Member.created_at >= begin, Member.created_at < finish)
+            .where(Member.tenant_id == tenant_id, Member.created_at >= begin, Member.created_at < finish)
         )
         or 0
     )
