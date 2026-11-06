@@ -17,6 +17,7 @@ const routes = [
       { path: '', redirect: () => (isSuperAdmin() ? '/tenants' : '/dashboard') },
       { path: 'tenants', name: 'Tenants', component: () => import('../views/Tenants.vue'), meta: { title: '租户管理', superOnly: true } },
       { path: 'dashboard', name: 'Dashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '首页仪表盘' } },
+      { path: 'stores', name: 'Stores', component: () => import('../views/Stores.vue'), meta: { title: '门店管理' } },
       { path: 'products', name: 'Products', component: () => import('../views/Products.vue'), meta: { title: '商品管理' } },
       { path: 'categories', name: 'Categories', component: () => import('../views/Categories.vue'), meta: { title: '分类管理' } },
       { path: 'members', name: 'Members', component: () => import('../views/Members.vue'), meta: { title: '会员管理' } },

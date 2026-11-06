@@ -17,6 +17,9 @@
           <el-menu-item index="/dashboard">
             <el-icon><Odometer /></el-icon><span>首页仪表盘</span>
           </el-menu-item>
+          <el-menu-item index="/stores">
+            <el-icon><Shop /></el-icon><span>门店管理</span>
+          </el-menu-item>
           <el-menu-item index="/products">
             <el-icon><Box /></el-icon><span>商品管理</span>
           </el-menu-item>
@@ -53,7 +56,28 @@
       <el-header class="admin-header">
         <div class="header-title">{{ currentTitle }}</div>
         <div class="header-right">
-          <div class="store-chip">{{ storeLabel }}</div>
+          <!-- 门店切换：点击展开可访问门店，切换后刷新页面使数据范围生效 -->
+          <el-dropdown v-if="!isSuper" trigger="click" @command="switchStore">
+            <div class="store-chip switchable">
+              <el-icon><Shop /></el-icon>
+              <span>{{ storeLabel }}</span>
+              <el-icon><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  v-for="store in storeList"
+                  :key="store.id"
+                  :command="String(store.id)"
+                  :disabled="String(store.id) === String(currentStoreId)"
+                >
+                  {{ store.name }}
+                </el-dropdown-item>
+                <el-dropdown-item v-if="!storeList.length" disabled>暂无可切换门店</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+          <div v-else class="store-chip">{{ storeLabel }}</div>
           <el-dropdown>
             <div class="user-chip">
               <el-avatar :size="30" class="user-avatar">{{ avatarChar }}</el-avatar>
@@ -62,7 +86,6 @@
             </div>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item v-if="!isSuper">切换门店</el-dropdown-item>
                 <el-dropdown-item v-if="!isSuper">修改密码</el-dropdown-item>
                 <el-dropdown-item divided @click="logout">退出登录</el-dropdown-item>
               </el-dropdown-menu>
@@ -80,14 +103,16 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, Box, FolderOpened, Avatar, PriceTag, SetUp, DataAnalysis,
-  Setting, ArrowDown, OfficeBuilding,
+  Setting, ArrowDown, OfficeBuilding, Shop,
 } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import {
-  clearAdminToken, clearStoreInfo, clearUserInfo, getCurrentStore, getStores, getUserInfo,
+  clearAdminToken, clearStoreInfo, clearUserInfo, fetchStores, getCurrentStore, getStores,
+  getUserInfo, setCurrentStore, setStores,
 } from '../api'
 
 const route = useRoute()
@@ -115,17 +140,35 @@ const avatarChar = computed(() => {
   return '店'
 })
 
+// 可切换的门店列表（登录时写入本地缓存，只保留启用门店）
+const storeList = ref(getStores().filter((s) => s.enabled !== false))
+
+// 当前选中的门店 ID
+const currentStoreId = ref(getCurrentStore())
+
 // 顶部门店标签：超级管理员显示平台名称，其他角色显示当前门店名
 const storeLabel = computed(() => {
   if (isSuper.value) return '平台运营中心'
-  const stores = getStores()
-  const currentId = getCurrentStore()
-  const matched = stores.find((s) => String(s.id) === String(currentId))
+  const matched = storeList.value.find((s) => String(s.id) === String(currentStoreId.value))
   return matched ? matched.name : '未选择门店'
 })
 
 // 同步状态（页面设计阶段使用静态模拟值）
 const syncOk = ref(true)
+
+/**
+ * 切换当前门店：写入本地缓存并刷新页面，使各页面按新门店重新取数
+ * @param {string} storeId 目标门店 ID
+ * @returns {void}
+ */
+const switchStore = (storeId) => {
+  if (String(storeId) === String(currentStoreId.value)) return
+  const target = storeList.value.find((s) => String(s.id) === String(storeId))
+  setCurrentStore(storeId)
+  ElMessage.success(`已切换到「${target ? target.name : '新门店'}」`)
+  // 整页刷新，确保列表、图表等已加载数据全部切换到新门店范围
+  window.location.reload()
+}
 
 // 退出登录：清除登录态并跳转登录页
 const logout = () => {
@@ -134,6 +177,34 @@ const logout = () => {
   clearUserInfo()
   router.push('/login')
 }
+
+/**
+ * 拉取最新门店列表，保证门店管理页新增/停用后顶部切换器同步更新
+ * @returns {Promise<void>}
+ */
+const refreshStoreList = async () => {
+  if (isSuper.value) return
+  try {
+    const rows = await fetchStores()
+    setStores(rows)
+    storeList.value = rows.filter((s) => s.enabled !== false)
+    // 当前门店被删除或停用时，自动切到第一个启用门店
+    const currentValid = storeList.value.some(
+      (s) => String(s.id) === String(currentStoreId.value),
+    )
+    if (!currentValid) {
+      const first = storeList.value[0]
+      if (first) {
+        setCurrentStore(first.id)
+        currentStoreId.value = String(first.id)
+      }
+    }
+  } catch {
+    // 拉取失败时沿用登录时缓存的门店列表，不阻断页面使用
+  }
+}
+
+onMounted(refreshStoreList)
 </script>
 
 <style scoped>
@@ -243,6 +314,16 @@ const logout = () => {
   border: 1px solid var(--neutral-200);
   border-radius: 999px;
   padding: 4px 14px;
+}
+.store-chip.switchable {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.store-chip.switchable:hover {
+  border-color: var(--brand);
+  color: var(--brand);
 }
 .user-chip {
   display: flex;
