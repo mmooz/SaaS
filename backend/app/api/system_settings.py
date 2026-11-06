@@ -4,7 +4,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
+from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.models import User
 from app.services.operation_log_service import OperationLogService
 from app.services.setting_service import SETTING_GROUPS, SettingService
 
@@ -29,6 +30,7 @@ def save_settings(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_manager_user),
 ):
     """保存指定分组的设置内容（整体覆盖），限定当前租户+门店。"""
     if group not in SETTING_GROUPS:

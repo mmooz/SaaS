@@ -5,7 +5,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_tenant_id
+from app.dependencies import get_admin_user, get_tenant_id
 from app.models import User
 from app.schemas.user_admin_out import UserAdminOut
 from app.schemas.user_create import UserCreate
@@ -73,6 +73,7 @@ def create_user(
     data: UserCreate,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
+    _user: User = Depends(get_admin_user),
 ):
     """新增后台用户（当前租户内用户名唯一，密码默认 123456）。"""
     exists = db.scalar(
@@ -104,6 +105,7 @@ def update_user(
     data: UserUpdate,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
+    _user: User = Depends(get_admin_user),
 ):
     """更新用户姓名/角色/启用状态，可同时重置密码。"""
     user = _get_user(db, user_id, tenant_id)
@@ -127,6 +129,7 @@ def reset_password(
     user_id: int,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
+    _user: User = Depends(get_admin_user),
 ):
     """把用户密码重置为默认密码 123456。"""
     user = _get_user(db, user_id, tenant_id)
