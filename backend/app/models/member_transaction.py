@@ -24,6 +24,10 @@ class MemberTransaction(Base):
     tenant_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
     )
+    # 发生门店 ID（会员库租户级共享后，流水仍需按门店归属统计）
+    store_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("stores.id"), index=True, nullable=False
+    )
     # 类型：recharge=充值，consume=消费，refund=退款，points=积分变动
     type: Mapped[str] = mapped_column(String(16), nullable=False)
     # 金额变动（正/负）
