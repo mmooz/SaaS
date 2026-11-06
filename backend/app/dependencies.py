@@ -49,6 +49,28 @@ def get_super_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+def get_admin_user(user: User = Depends(get_current_user)) -> User:
+    """要求当前登录用户为租户管理员（admin）。
+
+    :param user: 当前登录用户
+    :return: 租户管理员用户 ORM 对象
+    """
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅租户管理员可执行该操作")
+    return user
+
+
+def get_manager_user(user: User = Depends(get_current_user)) -> User:
+    """要求当前登录用户为店长或租户管理员（manager/admin）。
+
+    :param user: 当前登录用户
+    :return: 店长及以上角色的用户 ORM 对象
+    """
+    if user.role not in ("admin", "manager"):
+        raise HTTPException(status_code=403, detail="仅店长及以上角色可执行该操作")
+    return user
+
+
 def get_store_id(
     x_store_id: int | None = Header(None, alias="X-Store-Id"),
     db: Session = Depends(get_db),
