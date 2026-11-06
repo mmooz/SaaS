@@ -1,7 +1,9 @@
-"""交接班 API：开班、查询当前班次、班次汇总与交班。"""
+"""交接班 API：开班、查询当前班次、班次列表、班次汇总与交班。"""
+
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -63,6 +65,39 @@ def sync_shifts(
     count = ShiftService.sync(db, data.shifts, tenant_id, store_id)
     db.commit()
     return {"synced": count}
+
+
+@router.get("", response_model=dict)
+def list_shifts(
+    status: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db),
+    store_id: int = Depends(get_store_id),
+):
+    """分页查询本门店班次（支持按状态与开班时间范围筛选）。"""
+    stmt = select(ShiftSession).where(ShiftSession.store_id == store_id)
+    if status:
+        stmt = stmt.where(ShiftSession.status == status)
+    if start:
+        stmt = stmt.where(ShiftSession.start_at >= start)
+    if end:
+        stmt = stmt.where(ShiftSession.start_at <= end)
+
+    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
+    rows = db.scalars(
+        stmt.order_by(ShiftSession.start_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "items": [ShiftOut.model_validate(row) for row in rows],
+    }
 
 
 @router.get("/current", response_model=ShiftOut | None)
