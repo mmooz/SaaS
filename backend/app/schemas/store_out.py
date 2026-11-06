@@ -18,3 +18,5 @@ class StoreOut(BaseModel):
     address: str | None = None
     # 联系电话
     phone: str | None = None
+    # 是否启用（停用门店不出现在可切换列表）
+    enabled: bool = True
