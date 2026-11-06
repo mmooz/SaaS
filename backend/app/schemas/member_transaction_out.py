@@ -16,6 +16,8 @@ class MemberTransactionOut(BaseModel):
     id: SnowflakeId
     # 关联会员 ID
     member_id: SnowflakeId
+    # 发生门店 ID（会员库租户共享后，流水仍需区分门店）
+    store_id: SnowflakeId
     # 类型：recharge/consume/refund/points
     type: str
     # 金额变动
