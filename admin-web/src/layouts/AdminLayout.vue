@@ -20,6 +20,12 @@
           <el-menu-item index="/stores">
             <el-icon><Shop /></el-icon><span>门店管理</span>
           </el-menu-item>
+          <el-menu-item index="/orders">
+            <el-icon><Tickets /></el-icon><span>订单管理</span>
+          </el-menu-item>
+          <el-menu-item index="/shifts">
+            <el-icon><Clock /></el-icon><span>交接班</span>
+          </el-menu-item>
           <el-menu-item index="/products">
             <el-icon><Box /></el-icon><span>商品管理</span>
           </el-menu-item>
@@ -107,7 +113,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Odometer, Box, FolderOpened, Avatar, PriceTag, SetUp, DataAnalysis,
-  Setting, ArrowDown, OfficeBuilding, Shop,
+  Setting, ArrowDown, OfficeBuilding, Shop, Tickets, Clock,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import {
