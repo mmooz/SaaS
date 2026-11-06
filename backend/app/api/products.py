@@ -43,8 +43,10 @@ def list_products(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """分页查询商品列表（支持关键字/分类/计价方式筛选）。"""
-    base = apply_filters(select(Product).where(Product.store_id == store_id), query)
+    """分页查询商品列表（支持关键字/分类/计价方式筛选，已删除商品不返回）。"""
+    base = apply_filters(
+        select(Product).where(Product.store_id == store_id, Product.deleted.is_(False)), query
+    )
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     stmt = (
         base.order_by(Product.category_id, Product.id)
@@ -91,8 +93,8 @@ def batch_adjust_price(
     store_id: int = Depends(get_store_id),
 ):
     """批量改价：按分类/商品范围 + 比例/固定值调整，并记录价格历史。"""
-    # 确定改价范围（限定当前门店）
-    stmt = select(Product).where(Product.store_id == store_id)
+    # 确定改价范围（限定当前门店，已删除商品不参与改价）
+    stmt = select(Product).where(Product.store_id == store_id, Product.deleted.is_(False))
     if data.mode == "category":
         if data.category_id is None:
             raise HTTPException(status_code=422, detail="按分类改价需提供分类 ID")
@@ -184,9 +186,11 @@ def get_product(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """获取商品详情。"""
+    """获取商品详情（已删除商品视为不存在）。"""
     product = db.scalar(
-        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+        select(Product).where(
+            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+        )
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
@@ -201,9 +205,11 @@ def update_product(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """更新商品（仅更新传入字段）。"""
+    """更新商品（仅更新传入字段，已删除商品不可编辑）。"""
     product = db.scalar(
-        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+        select(Product).where(
+            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+        )
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
@@ -243,15 +249,19 @@ def delete_product(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """删除商品。"""
+    """删除商品（软删除：仅打标记并停用，保留数据用于历史追溯）。"""
     product = db.scalar(
-        select(Product).where(Product.id == product_id, Product.store_id == store_id)
+        select(Product).where(
+            Product.id == product_id, Product.store_id == store_id, Product.deleted.is_(False)
+        )
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
-    # 先取出名称/条码，删除提交后对象将失效
+    # 先取出名称/条码，供操作日志使用
     name, barcode = product.name, product.barcode
-    db.delete(product)
+    # 标记删除并停用，避免收银端继续售卖
+    product.deleted = True
+    product.enabled = False
     db.commit()
     OperationLogService.record(
         db, "删除商品", f"删除商品 {name}（{barcode}）", tenant_id=tenant_id
