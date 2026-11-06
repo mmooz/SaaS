@@ -2,7 +2,17 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -13,11 +23,15 @@ class Product(Base):
     """商品表：包含称重/按件两种计价方式，含价格、库存与生鲜属性。"""
 
     __tablename__ = "products"
+    # 表级约束：条码在同租户内唯一，不同租户可使用相同条码
+    __table_args__ = (
+        Index("uq_products_tenant_barcode", "tenant_id", "barcode", unique=True),
+    )
 
     # 主键
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
-    # 商品条码（唯一，含生鲜店内码）
-    barcode: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    # 商品条码（同租户内唯一，含生鲜店内码）
+    barcode: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     # 商品名称
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     # 拼音码（用于快速检索）
