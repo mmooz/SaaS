@@ -764,12 +764,13 @@ export function revokeStoreAccess(storeId, userId) {
 
 /**
  * 分页查询订单
- * @param {object} params { start, end, status, page, pageSize }
+ * @param {object} params { keyword, start, end, status, page, pageSize }
  * @returns {Promise<object>} 订单分页数据
  */
 export function fetchOrders(params = {}) {
   return request(
     `/api/orders${query({
+      keyword: params.keyword,
       start: params.start,
       end: params.end,
       status: params.status,
@@ -777,6 +778,65 @@ export function fetchOrders(params = {}) {
       page_size: params.pageSize,
     })}`,
   )
+}
+
+/**
+ * 查询订单详情
+ * @param {string} orderNo 订单号
+ * @returns {Promise<object>} 订单详情（含明细与退款金额）
+ */
+export function fetchOrderDetail(orderNo) {
+  return request(`/api/orders/${encodeURIComponent(orderNo)}`)
+}
+
+/**
+ * 查询订单退款记录
+ * @param {string} orderNo 订单号
+ * @returns {Promise<Array<object>>} 退款记录列表
+ */
+export function fetchOrderRefunds(orderNo) {
+  return request(`/api/orders/${encodeURIComponent(orderNo)}/refunds`)
+}
+
+/**
+ * 发起订单退款（整单或按明细退货）
+ * @param {string} orderNo 订单号
+ * @param {object} data { refund_type, item_ids, reason }
+ * @returns {Promise<object>} 退款单信息
+ */
+export function refundOrder(orderNo, data) {
+  return request(`/api/orders/${encodeURIComponent(orderNo)}/refund`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+/* ---------------- 交接班 ---------------- */
+
+/**
+ * 分页查询班次
+ * @param {object} params { status, start, end, page, pageSize }
+ * @returns {Promise<object>} 班次分页数据
+ */
+export function fetchShifts(params = {}) {
+  return request(
+    `/api/shifts${query({
+      status: params.status,
+      start: params.start,
+      end: params.end,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  )
+}
+
+/**
+ * 查询班次汇总（销售、退款、各支付方式与应交现金）
+ * @param {number|string} shiftId 班次 ID
+ * @returns {Promise<object>} 班次汇总数据
+ */
+export function fetchShiftSummary(shiftId) {
+  return request(`/api/shifts/${shiftId}/summary`)
 }
 
 /* ---------------- 报表 ---------------- */
