@@ -44,10 +44,10 @@ def create_member(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """会员建档：同门店手机号已存在则返回 409。"""
-    # 手机号唯一性校验（限定当前门店）
+    """会员建档：同租户手机号已存在则返回 409。"""
+    # 手机号唯一性校验（限定当前租户）
     existing = db.scalar(
-        select(Member).where(Member.mobile == data.mobile, Member.store_id == store_id)
+        select(Member).where(Member.mobile == data.mobile, Member.tenant_id == tenant_id)
     )
     if existing:
         raise HTTPException(status_code=409, detail="该手机号已建档")

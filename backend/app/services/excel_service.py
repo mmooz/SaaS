@@ -162,12 +162,17 @@ class ExcelService:
         # 分类：按名称查找或自动创建（支持"一级/二级"路径）
         category_id = self._resolve_category(db, category_name, category_cache, tenant_id, store_id)
 
-        # 按条码查找已有商品（限定当前门店，使用缓存避免重复查询）
+        # 按条码查找已有商品（同租户内唯一，使用缓存避免重复查询）
         product = barcode_cache.get(barcode)
         if product is None:
             product = db.scalar(
-                select(Product).where(Product.barcode == barcode, Product.store_id == store_id)
+                select(Product).where(
+                    Product.barcode == barcode, Product.tenant_id == tenant_id
+                )
             )
+        # 条码已属于同租户其他门店，拒绝导入该行，避免串改他店商品
+        if product is not None and product.store_id != store_id:
+            raise ValueError(f"条码 {barcode} 已被同租户其他门店的商品占用")
 
         if product:
             # 更新已有商品

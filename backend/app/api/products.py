@@ -155,10 +155,10 @@ def create_product(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """新增商品（同门店条码唯一）。"""
+    """新增商品（同租户条码唯一）。"""
     exists = db.scalar(
         select(Product).where(
-            Product.barcode == data.barcode, Product.store_id == store_id
+            Product.barcode == data.barcode, Product.tenant_id == tenant_id
         )
     )
     if exists:
@@ -207,13 +207,13 @@ def update_product(
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
-    # 条码唯一性校验（同门店范围内）
+    # 条码唯一性校验（同租户范围内）
     if data.barcode:
         dup = db.scalar(
             select(Product).where(
                 Product.barcode == data.barcode,
                 Product.id != product_id,
-                Product.store_id == store_id,
+                Product.tenant_id == tenant_id,
             )
         )
         if dup:
