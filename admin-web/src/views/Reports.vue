@@ -69,7 +69,10 @@
             <el-radio-button value="week">按周</el-radio-button>
           </el-radio-group>
         </div>
-        <div ref="dailyChartRef" class="chart-box"></div>
+        <div class="chart-box">
+          <div ref="dailyChartRef" class="chart-canvas"></div>
+          <div v-if="dailyEmpty" class="chart-empty">暂无销售数据</div>
+        </div>
       </div>
     </div>
 
@@ -108,7 +111,10 @@
           <div class="card-head">
             <h3>Top 10 销售额</h3>
           </div>
-          <div ref="rankChartRef" class="chart-box"></div>
+          <div class="chart-box">
+            <div ref="rankChartRef" class="chart-canvas"></div>
+            <div v-if="rankEmpty" class="chart-empty">暂无排行数据</div>
+          </div>
         </div>
       </div>
     </div>
@@ -120,7 +126,10 @@
           <h3>分时段销售额曲线（全天 24 小时）</h3>
           <el-tag v-if="hourly.total_sales > 0" type="warning" effect="light" size="small">高峰 {{ hourly.peak_label }}</el-tag>
         </div>
-        <div ref="hourlyChartRef" class="chart-box tall"></div>
+        <div class="chart-box tall">
+          <div ref="hourlyChartRef" class="chart-canvas"></div>
+          <div v-if="hourlyEmpty" class="chart-empty">暂无时段数据</div>
+        </div>
       </div>
       <div class="stat-grid">
         <div class="stat-card">
@@ -183,7 +192,10 @@
           <h3>分类毛利分析</h3>
           <span class="count-hint">销售额 / 毛利</span>
         </div>
-        <div ref="profitChartRef" class="chart-box tall"></div>
+        <div class="chart-box tall">
+          <div ref="profitChartRef" class="chart-canvas"></div>
+          <div v-if="profitEmpty" class="chart-empty">暂无毛利数据</div>
+        </div>
       </div>
     </div>
 
@@ -333,6 +345,15 @@ const memberReport = ref({
 
 // 会员消费排行
 const memberRank = computed(() => memberReport.value.items)
+
+// 销售趋势空态：没有任何销售额或订单时展示占位提示
+const dailyEmpty = computed(() => !daily.value.trend.some((t) => t.sales > 0 || t.orders > 0))
+// 商品排行空态：无排行记录时展示占位提示
+const rankEmpty = computed(() => !rankData.value.length)
+// 时段分析空态：所有时段销售额为 0 时展示占位提示
+const hourlyEmpty = computed(() => !hourly.value.points.some((p) => p.sales > 0))
+// 毛利分析空态：无分类毛利数据时展示占位提示
+const profitEmpty = computed(() => !profit.value.categories.length)
 
 // 会员等级：后端值 → 中文文案
 const LEVEL_TO_TEXT = { normal: '普通卡', silver: '银卡', gold: '金卡' }
@@ -638,6 +659,11 @@ function exportExcel() {
     header = ['会员', '等级', '消费笔数', '消费金额', '占比%']
     rows = memberRank.value.map((m) => [m.name, levelText(m.level), m.orders, m.amount, m.ratio])
   }
+  // 无数据时不生成空文件，直接提示
+  if (!rows.length) {
+    ElMessage.warning('当前报表暂无数据，无法导出')
+    return
+  }
   const csv = [header, ...rows].map((row) => row.map(csvCell).join(',')).join('\r\n')
   const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' })
   const url = URL.createObjectURL(blob)
@@ -747,7 +773,23 @@ function exportExcel() {
   grid-column: span 2;
 }
 .chart-box {
+  position: relative;
   height: 280px;
+}
+/* 图表画布占满容器，空态提示叠加在画布上方 */
+.chart-canvas {
+  width: 100%;
+  height: 100%;
+}
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--neutral-500);
+  background: rgba(255, 255, 255, 0.75);
 }
 .chart-box.tall {
   height: 320px;
