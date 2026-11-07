@@ -31,6 +31,14 @@ const SCHEMA = [
     status TEXT DEFAULT 'open',
     synced INTEGER DEFAULT 0
   )`,
+  // Q25：死信队列，隔离服务端明确拒绝（4xx/5xx）的队列项，避免阻塞后续补传
+  `CREATE TABLE IF NOT EXISTS dead_letter_queue (
+    queue_key TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    failed_at TEXT NOT NULL
+  )`,
   'CREATE INDEX IF NOT EXISTS idx_queue_kind ON offline_queue(kind, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_orders_shift ON local_orders(created_at)',
 ]
@@ -38,6 +46,19 @@ const SCHEMA = [
 // Q26：兼容旧库的增量列。旧库已存在同名列时 SQLite 会报错，逐条 try/catch 忽略，
 // 不引入 Alembic 之外的迁移框架，也不改动既有行数据。
 const MIGRATIONS = ['ALTER TABLE local_shifts ADD COLUMN store_id TEXT']
+
+/**
+ * 规范化队列主键：兼容调用方传业务 key（订单号）或 listQueue 返回的完整 queue_key。
+ * Q25：修掉既有 bug——原先 removeQueueItem('order', item.key) 会把完整键再拼一次
+ * 前缀，导致成功上传的队列项删不掉。
+ * @param {string} kind 队列类型 order/refund/shift
+ * @param {string} key 业务主键或完整队列键
+ * @returns {string} 规范化后的队列主键
+ */
+function normalizeQueueKey(kind, key) {
+  const raw = String(key)
+  return raw.startsWith(`${kind}:`) ? raw : `${kind}:${raw}`
+}
 
 /**
  * 离线数据仓库：桌面端使用 Tauri SQLite，浏览器环境使用 localStorage 兜底。
@@ -111,6 +132,8 @@ export class OfflineStore {
     this.memory.orders = this.memory.orders || {}
     this.memory.queue = this.memory.queue || {}
     this.memory.shifts = this.memory.shifts || {}
+    // Q25：兼容旧数据缺失死信分支
+    this.memory.deadLetters = this.memory.deadLetters || {}
   }
 
   /**
@@ -174,13 +197,14 @@ export class OfflineStore {
         .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
         .slice(0, limit)
     }
+    // Q25：先按关键字过滤再 LIMIT，与浏览器兜底分支行为一致，
+    // 避免「先取最近 20 条再过滤」导致更早的匹配订单搜不到。
+    const like = `%${kw}%`
     const rows = await this.db.select(
-      'SELECT payload FROM local_orders ORDER BY created_at DESC LIMIT ?',
-      [limit],
+      'SELECT payload FROM local_orders WHERE order_no LIKE ? OR payload LIKE ? ORDER BY created_at DESC LIMIT ?',
+      [like, like, limit],
     )
-    return rows
-      .map((row) => JSON.parse(row.payload))
-      .filter((order) => this.matchOrder(order, kw))
+    return rows.map((row) => JSON.parse(row.payload))
   }
 
   /**
@@ -228,7 +252,7 @@ export class OfflineStore {
     await this.init()
     const data = JSON.stringify(payload)
     const time = createdAt || new Date().toISOString()
-    const queueKey = `${kind}:${key}`
+    const queueKey = normalizeQueueKey(kind, key)
     if (!this.tauri) {
       this.memory.queue[queueKey] = { kind, payload: data, created_at: time }
       this.saveMemory()
@@ -285,7 +309,7 @@ export class OfflineStore {
    */
   async removeQueueItem(kind, key) {
     await this.init()
-    const queueKey = `${kind}:${key}`
+    const queueKey = normalizeQueueKey(kind, key)
     if (!this.tauri) {
       delete this.memory.queue[queueKey]
       this.saveMemory()
@@ -302,6 +326,83 @@ export class OfflineStore {
     await this.init()
     if (!this.tauri) return Object.keys(this.memory.queue).length
     const rows = await this.db.select('SELECT COUNT(*) AS total FROM offline_queue')
+    return Number(rows[0]?.total || 0)
+  }
+
+  /**
+   * 把被服务端明确拒绝的队列项移到死信队列（Q25）
+   * 同时从主队列移除，保证坏数据不再阻塞后续项；同一队列项重复失败时覆盖原因。
+   * @param {string} kind 类型 order/refund/shift
+   * @param {string} key 业务主键或完整队列键
+   * @param {object|string} payload 原始载荷
+   * @param {string} reason 失败原因（含 HTTP 状态与错误文案）
+   * @param {string} [failedAt] 失败时间
+   * @returns {Promise<void>}
+   */
+  async moveToDeadLetter(kind, key, payload, reason, failedAt) {
+    await this.init()
+    const queueKey = normalizeQueueKey(kind, key)
+    const data = typeof payload === 'string' ? payload : JSON.stringify(payload || {})
+    const time = failedAt || new Date().toISOString()
+    if (!this.tauri) {
+      delete this.memory.queue[queueKey]
+      this.memory.deadLetters[queueKey] = {
+        kind, payload: data, reason, failed_at: time,
+      }
+      this.saveMemory()
+      return
+    }
+    await this.db.execute('DELETE FROM offline_queue WHERE queue_key = ?', [queueKey])
+    await this.db.execute(
+      `INSERT INTO dead_letter_queue(queue_key, kind, payload, reason, failed_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(queue_key) DO UPDATE SET
+         payload = excluded.payload,
+         reason = excluded.reason,
+         failed_at = excluded.failed_at`,
+      [queueKey, kind, data, reason, time],
+    )
+  }
+
+  /**
+   * 列出死信队列（供监控与人工重放查询）
+   * @returns {Promise<Array<{key:string,kind:string,payload:object,reason:string,failed_at:string}>>}
+   */
+  async listDeadLetters() {
+    await this.init()
+    let rows
+    if (!this.tauri) {
+      rows = Object.entries(this.memory.deadLetters).map(([key, value]) => ({
+        queue_key: key,
+        kind: value.kind,
+        payload: value.payload,
+        reason: value.reason,
+        failed_at: value.failed_at,
+      }))
+    } else {
+      rows = await this.db.select(
+        'SELECT queue_key, kind, payload, reason, failed_at FROM dead_letter_queue ORDER BY failed_at DESC',
+      )
+    }
+    return rows
+      .sort((a, b) => (a.failed_at < b.failed_at ? 1 : -1))
+      .map((row) => ({
+        key: row.queue_key,
+        kind: row.kind,
+        payload: JSON.parse(row.payload),
+        reason: row.reason,
+        failed_at: row.failed_at,
+      }))
+  }
+
+  /**
+   * 统计死信队列数量（供监控查询）
+   * @returns {Promise<number>} 死信项数量
+   */
+  async deadLetterCount() {
+    await this.init()
+    if (!this.tauri) return Object.keys(this.memory.deadLetters).length
+    const rows = await this.db.select('SELECT COUNT(*) AS total FROM dead_letter_queue')
     return Number(rows[0]?.total || 0)
   }
 

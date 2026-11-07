@@ -14,6 +14,22 @@ const STORE_KEY = 'pos_store_id'
 const STORES_KEY = 'pos_stores'
 
 /**
+ * 带 HTTP 状态码的请求异常（Q25：用于区分网络错误与业务错误）
+ * 有明确 status 的错误说明服务端已响应，不应无限重试，应进入死信队列。
+ */
+export class ApiError extends Error {
+  /**
+   * @param {string} message 错误提示
+   * @param {number} status HTTP 状态码
+   */
+  constructor(message, status) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+/**
  * 保存登录令牌（登录成功后调用）
  * @param {string} token 访问令牌
  */
@@ -111,11 +127,12 @@ async function request(path, options = {}) {
     if (window.location.pathname !== '/login') {
       window.location.href = '/login'
     }
-    throw new Error('登录已过期，请重新登录')
+    throw new ApiError('登录已过期，请重新登录', 401)
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `请求失败(${res.status})`)
+    // Q25：把 HTTP status 挂到异常上，供离线队列按错误类型分流
+    throw new ApiError(body.detail || `请求失败(${res.status})`, res.status)
   }
   if (res.status === 204) return null
   return res.json()
@@ -123,11 +140,16 @@ async function request(path, options = {}) {
 
 /**
  * 判断请求失败是否属于网络不可用（用于触发离线兜底）
+ * Q25：带明确 HTTP status 的异常属于服务端已响应的业务错误（4xx/5xx），
+ * 一律返回 false，避免离线队列因脏数据永久卡死；只有 fetch 本身抛出的
+ * TypeError / 网络类异常才视为网络错误。
  * @param {Error} err 请求异常
  * @returns {boolean} 是否为网络异常
  */
 export function isNetworkError(err) {
   if (!err) return false
+  if (typeof err.status === 'number') return false
+  if (err instanceof ApiError) return false
   if (err instanceof TypeError) return true
   return /failed to fetch|networkerror|network error|load failed|connection/i.test(
     err.message || '',

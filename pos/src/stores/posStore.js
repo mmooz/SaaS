@@ -10,6 +10,7 @@ import {
   fetchSyncData,
   getCurrentStore,
   getStores,
+  isNetworkError,
   refundOrder as apiRefundOrder,
   setAuthToken,
   setCurrentStore,
@@ -79,6 +80,8 @@ export const usePosStore = defineStore('pos', {
     hangOrders: loadLS(LS_HANG, []),
     // 待上传订单队列（启动后从本地离线数据库加载）
     offlineOrders: [],
+    // Q25：死信队列镜像（被服务端明确拒绝的队列项，供监控/人工重放）
+    deadLetters: [],
   }),
 
   getters: {
@@ -133,6 +136,10 @@ export const usePosStore = defineStore('pos', {
     hasOfflineOrders(state) {
       return state.offlineOrders.length > 0
     },
+    // Q25：死信队列数量（供监控/查询，不强制改 UI）
+    deadLetterCount(state) {
+      return state.deadLetters.length
+    },
   },
 
   actions: {
@@ -143,8 +150,17 @@ export const usePosStore = defineStore('pos', {
     async initOffline() {
       await offlineStore.init()
       await this.reloadOfflineOrders()
+      await this.reloadDeadLetters()
       // 旧版本 localStorage 队列已迁移，清理避免重复
       localStorage.removeItem(LS_OFFLINE)
+    },
+
+    /**
+     * 从离线仓库刷新死信队列镜像（Q25）
+     * @returns {Promise<void>}
+     */
+    async reloadDeadLetters() {
+      this.deadLetters = await offlineStore.listDeadLetters()
     },
 
     /**
@@ -509,35 +525,48 @@ export const usePosStore = defineStore('pos', {
 
     /**
      * 补传离线数据：依次上传班次 → 订单 → 退款（保证退款引用的订单已存在）
-     * @returns {Promise<{uploaded:number}>} 本次成功补传的订单数
+     * Q25：按 isNetworkError 分流——网络错误才 break 保留队列；业务错误（4xx/5xx）
+     * 记录失败原因并把该项移到死信队列，从主队列移除后继续处理后续项，不再吞整批。
+     * @returns {Promise<{uploaded:number, deadLettered:number}>} 成功补传数与本次隔离到死信的项数
      */
     async flushOfflineOrders() {
       await this.initOffline()
+      let deadLettered = 0
       // 1. 先补传班次，保证离线订单的班次归属有效
       const pendingShifts = await offlineStore.listPendingShifts()
       if (pendingShifts.length) {
+        const shiftPayloads = pendingShifts.map((shift) => ({
+          id: shift.shift_id,
+          cashier_id: shift.cashier_id,
+          // Q26：用班次快照固化的发生门店；旧库无该字段时回退当前门店
+          store_id: shift.store_id || getCurrentStore() || null,
+          start_at: shift.start_at,
+          end_at: shift.end_at,
+          base_cash: Number(shift.base_cash) || 0,
+          total_sales: Number(shift.total_sales) || 0,
+          order_count: Number(shift.order_count) || 0,
+          status: shift.status,
+        }))
         try {
-          await syncShifts(
-            pendingShifts.map((shift) => ({
-              id: shift.shift_id,
-              cashier_id: shift.cashier_id,
-              // Q26：用班次快照固化的发生门店；旧库无该字段时回退当前门店
-              store_id: shift.store_id || getCurrentStore() || null,
-              start_at: shift.start_at,
-              end_at: shift.end_at,
-              base_cash: Number(shift.base_cash) || 0,
-              total_sales: Number(shift.total_sales) || 0,
-              order_count: Number(shift.order_count) || 0,
-              status: shift.status,
-            })),
-          )
+          await syncShifts(shiftPayloads)
           for (const shift of pendingShifts) {
             await offlineStore.markShiftSynced(shift.shift_id)
           }
-        } catch {
-          // 网络不可用时保持未同步状态，下次启动再补传
-          await this.reloadOfflineOrders()
-          return { uploaded: 0 }
+        } catch (err) {
+          if (isNetworkError(err)) {
+            // 网络不可用：保持未同步状态，下次启动再补传
+            await this.reloadOfflineOrders()
+            return { uploaded: 0, deadLettered: 0 }
+          }
+          // 业务错误：整批隔离到死信队列，不阻断后续订单/退款补传
+          const reason = `班次补传被服务端拒绝：${err.status ?? ''} ${err.message || '未知错误'}`
+          for (let i = 0; i < pendingShifts.length; i += 1) {
+            await offlineStore.moveToDeadLetter(
+              'shift', pendingShifts[i].shift_id, shiftPayloads[i], reason,
+            )
+            await offlineStore.markShiftSynced(pendingShifts[i].shift_id)
+            deadLettered += 1
+          }
         }
       }
       // 2. 按发生顺序补传订单
@@ -549,8 +578,14 @@ export const usePosStore = defineStore('pos', {
           await offlineStore.removeQueueItem('order', item.key)
           await offlineStore.saveLocalOrder({ ...item.payload, offline: false, synced: true })
           uploaded += 1
-        } catch {
-          break // 网络仍不可用，停止重传
+        } catch (err) {
+          if (isNetworkError(err)) break // 网络仍不可用，保留队列待下次重试
+          await offlineStore.moveToDeadLetter(
+            'order', item.key, item.payload,
+            `订单补传被服务端拒绝：${err.status ?? ''} ${err.message || '未知错误'}`,
+          )
+          deadLettered += 1
+          // 不 break：坏项已从主队列移除，继续处理后续项
         }
       }
       // 3. 最后补传退款
@@ -567,12 +602,18 @@ export const usePosStore = defineStore('pos', {
             authorizerId: item.payload.authorizer_id,
           })
           await offlineStore.removeQueueItem('refund', item.key)
-        } catch {
-          break
+        } catch (err) {
+          if (isNetworkError(err)) break
+          await offlineStore.moveToDeadLetter(
+            'refund', item.key, item.payload,
+            `退款补传被服务端拒绝：${err.status ?? ''} ${err.message || '未知错误'}`,
+          )
+          deadLettered += 1
         }
       }
       await this.reloadOfflineOrders()
-      return { uploaded }
+      await this.reloadDeadLetters()
+      return { uploaded, deadLettered }
     },
 
     /**
