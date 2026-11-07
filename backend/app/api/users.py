@@ -9,15 +9,14 @@ from app.dependencies import get_admin_user, get_tenant_id
 from app.models import User
 from app.schemas.user_admin_out import UserAdminOut
 from app.schemas.user_create import UserCreate
+from app.schemas.user_password_reset_out import UserPasswordResetOut
 from app.schemas.user_update import UserUpdate
 from app.services.operation_log_service import OperationLogService
 from app.services.password_hasher import PasswordHasher
+from app.services.password_policy import generate_temporary_password
 
 # 用户路由
 router = APIRouter(prefix="/api/users", tags=["用户管理"])
-
-# 重置密码时使用的默认密码
-DEFAULT_PASSWORD = "123456"
 
 
 def _to_out(user: User) -> UserAdminOut:
@@ -75,7 +74,11 @@ def create_user(
     tenant_id: int = Depends(get_tenant_id),
     _user: User = Depends(get_admin_user),
 ):
-    """新增后台用户（Q11：登录按用户名全局查找，故用户名全平台唯一）。"""
+    """新增后台用户（Q11：登录按用户名全局查找，故用户名全平台唯一）。
+
+    R8：初始密码由请求体必填，强度由 ``UserCreate`` 统一校验，
+    服务端不再提供任何默认口令。
+    """
     # Q11：与 api/auth.py 的登录查询、TenantService.create 的初始管理员校验、
     # DB 唯一索引 uq_users_username 保持同一口径；带 tenant_id 会让两个租户
     # 建出同名账号，后创建者永远无法登录或误入他人账号
@@ -88,7 +91,7 @@ def create_user(
         name=data.name.strip(),
         role=data.role,
         enabled=True,
-        password_hash=PasswordHasher.hash(data.password or DEFAULT_PASSWORD),
+        password_hash=PasswordHasher.hash(data.password),
     )
     db.add(user)
     db.flush()
@@ -125,19 +128,29 @@ def update_user(
     return _to_out(user)
 
 
-@router.post("/{user_id}/reset-password", response_model=UserAdminOut)
+@router.post("/{user_id}/reset-password", response_model=UserPasswordResetOut)
 def reset_password(
     user_id: int,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     _user: User = Depends(get_admin_user),
 ):
-    """把用户密码重置为默认密码 123456。"""
+    """R8：把用户密码重置为随机临时密码，并在本次响应中一次性返回。
+
+    响应契约由 ``UserAdminOut`` 改为 ``{user, temporary_password}``；
+    明文密码只出现在响应体，操作日志与数据库均不保存明文。
+    """
     user = _get_user(db, user_id, tenant_id)
-    user.password_hash = PasswordHasher.hash(DEFAULT_PASSWORD)
+    temporary_password = generate_temporary_password()
+    user.password_hash = PasswordHasher.hash(temporary_password)
     OperationLogService.record(
-        db, "重置密码", f"重置用户 {user.username} 的密码", tenant_id=tenant_id
+        db,
+        "重置密码",
+        f"重置用户 {user.username} 的密码（随机临时密码，一次性返回，明文不入库不记日志）",
+        tenant_id=tenant_id,
     )
     db.commit()
     db.refresh(user)
-    return _to_out(user)
+    return UserPasswordResetOut(
+        user=_to_out(user), temporary_password=temporary_password
+    )

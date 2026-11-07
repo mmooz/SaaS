@@ -571,7 +571,7 @@ export function fetchUsers(params = {}) {
 }
 
 /**
- * 新增后台用户
+ * 新增后台用户（R8：初始密码必填，至少 8 位且不得为常见弱口令）
  * @param {object} data { username, name, role, password }
  * @returns {Promise<object>} 用户信息
  */
@@ -582,7 +582,7 @@ export function createUser(data) {
       username: data.username,
       name: data.name,
       role: data.role,
-      password: data.password || null,
+      password: data.password,
     }),
   })
 }
@@ -598,9 +598,9 @@ export function updateUser(id, data) {
 }
 
 /**
- * 重置用户密码为默认密码
+ * 重置用户密码：服务端生成随机临时密码并一次性返回（R8，不再有固定默认口令）
  * @param {number} id 用户 ID
- * @returns {Promise<object>} 用户信息
+ * @returns {Promise<{user: object, temporary_password: string}>} 用户信息与临时密码
  */
 export function resetUserPassword(id) {
   return request(`/api/users/${id}/reset-password`, { method: 'POST' })

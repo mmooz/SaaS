@@ -152,8 +152,14 @@
                   <el-option label="收银员" value="cashier" />
                 </el-select>
               </el-form-item>
-              <el-form-item v-if="!userForm.id" label="初始密码">
-                <el-input v-model="userForm.password" placeholder="默认 123456" />
+              <el-form-item v-if="!userForm.id" label="初始密码" required>
+                <el-input
+                  v-model="userForm.password"
+                  type="password"
+                  show-password
+                  maxlength="64"
+                  placeholder="必填，至少 8 位，勿用常见弱口令"
+                />
               </el-form-item>
               <el-form-item v-else label="账号状态">
                 <el-switch v-model="userForm.enabled" active-text="启用" inactive-text="停用" />
@@ -234,7 +240,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Search, Refresh, Shop, Operation, User, Document, FolderChecked, InfoFilled } from '@element-plus/icons-vue'
 import {
@@ -411,6 +417,11 @@ const saveUser = async () => {
     ElMessage.warning('请填写用户名和姓名')
     return
   }
+  // R8：初始密码必填且至少 8 位（后端仍会做弱口令校验并返回 422）
+  if (!userForm.id && (!userForm.password || userForm.password.length < 8)) {
+    ElMessage.warning('请设置至少 8 位的初始密码')
+    return
+  }
   userSaving.value = true
   try {
     if (userForm.id) {
@@ -438,20 +449,58 @@ const saveUser = async () => {
   }
 }
 
-// 重置密码：服务端重置为默认密码 123456
+// 重置密码：服务端生成随机临时密码，仅在本次弹窗展示一次（R8，不再有固定默认口令）
 const resetPassword = (row) => {
-  ElMessageBox.confirm(`确定将「${row.username}」的密码重置为 123456 吗？`, '重置密码', {
-    confirmButtonText: '重置',
-    cancelButtonText: '取消',
-    type: 'warning',
-  })
+  ElMessageBox.confirm(
+    `确定要重置「${row.username}」的密码吗？系统将生成随机临时密码，仅本次展示一次，请立即复制并通过安全渠道转交本人。`,
+    '重置密码',
+    {
+      confirmButtonText: '重置',
+      cancelButtonText: '取消',
+      type: 'warning',
+    },
+  )
     .then(async () => {
+      let res
       try {
-        await resetUserPassword(row.id)
-        ElMessage.success(`已重置「${row.username}」密码为 123456`)
+        res = await resetUserPassword(row.id)
       } catch (e) {
         ElMessage.error(e.message || '重置失败')
+        return
       }
+      const temp = (res && res.temporary_password) || ''
+      if (!temp) {
+        // 兼容旧版服务端（仅返回用户信息）时不误报失败
+        ElMessage.success(`已重置「${row.username}」的密码`)
+        return
+      }
+      // 优先自动写入剪贴板；未授权时弹窗内的文本框仍可手动全选复制
+      try {
+        await navigator.clipboard.writeText(temp)
+      } catch {
+        // 浏览器不支持或拒绝剪贴板权限时忽略
+      }
+      await ElMessageBox.alert(
+        h('div', [
+          h('p', { style: 'margin: 0 0 10px; line-height: 1.7;' },
+            '临时密码仅本次可见，服务端不保存明文，请立即复制并转交本人。'),
+          h('input', {
+            value: temp,
+            readonly: true,
+            onFocus: (e) => e.target.select(),
+            style: 'width: 100%; box-sizing: border-box; padding: 8px 10px; font-family: monospace; font-size: 15px; letter-spacing: 1px; border: 1px solid #dcdfe6; border-radius: 6px;',
+          }),
+          h('p', { style: 'margin: 10px 0 0; font-size: 12px; color: #909399;' },
+            '已尝试自动复制到剪贴板；如未成功，请点击上方文本框全选后手动复制。'),
+        ]),
+        `「${row.username}」的临时密码`,
+        {
+          confirmButtonText: '我已保存',
+          type: 'success',
+          closeOnClickModal: false,
+          closeOnPressEscape: false,
+        },
+      ).catch(() => {})
     })
     .catch(() => {})
 }
