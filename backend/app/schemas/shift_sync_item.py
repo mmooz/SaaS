@@ -12,8 +12,9 @@ class ShiftSyncItem(BaseModel):
     id: int
     # 收银员用户 ID
     cashier_id: int
-    # 预留门店 ID
-    store_id: int = 1
+    # 班次发生门店（离线补传时可能取不到，留空则由服务端用当前上下文填充；
+    # Q04：不再提供默认值 1，避免把班次静默归到错误门店）
+    store_id: int | None = None
     # 接班时间
     start_at: datetime
     # 交班时间（空表示仍在进行）

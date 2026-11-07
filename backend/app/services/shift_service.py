@@ -145,8 +145,16 @@ class ShiftService:
         """
         synced = 0
         for item in items:
+            # Q04：载荷携带门店时必须与当前上下文一致，防止 A 店离线、
+            # B 店联网补传把班次落到错误门店（Q26 的完整修复见 B2）
+            if item.store_id is not None and item.store_id != store_id:
+                raise ValueError("班次所属门店与当前登录门店不一致，拒绝补传")
             shift = db.get(ShiftSession, item.id)
             if shift:
+                # Q04：db.get 按主键全局查找，命中后必须校验归属，
+                # 否则客户端传他店班次 ID 即可篡改其销售额与交班状态
+                if shift.tenant_id != tenant_id or shift.store_id != store_id:
+                    raise ValueError("班次不属于当前租户或门店，拒绝补传")
                 # 已存在则补全交班信息与本地统计
                 shift.end_at = item.end_at or shift.end_at
                 shift.status = item.status

@@ -7,8 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_store_id, get_tenant_id
-from app.models import ShiftSession
+from app.dependencies import get_current_user, get_store_id, get_tenant_id
+from app.models import ShiftSession, User
 from app.schemas.shift_close import ShiftClose
 from app.schemas.shift_open import ShiftOpen
 from app.schemas.shift_out import ShiftOut
@@ -60,9 +60,17 @@ def sync_shifts(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    _user: User = Depends(get_current_user),
 ):
-    """离线收银端批量补传班次（按班次主键幂等写入）。"""
-    count = ShiftService.sync(db, data.shifts, tenant_id, store_id)
+    """离线收银端批量补传班次（按班次主键幂等写入，须为登录用户）。
+
+    Q04：服务层对载荷门店与已存在班次的租户/门店归属做校验，不匹配时
+    拒绝整批补传并返回 403，避免静默跳过或篡改他人班次。
+    """
+    try:
+        count = ShiftService.sync(db, data.shifts, tenant_id, store_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     db.commit()
     return {"synced": count}
 
