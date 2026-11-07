@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.dependencies import get_current_user, get_super_admin
+from app.dependencies import get_admin_user, get_current_user, get_super_admin
 from app.models import Tenant, User
 from app.schemas.tenant_admin_create import TenantAdminCreate
 from app.schemas.tenant_out import TenantOut
@@ -83,9 +83,14 @@ def update_tenant(
     tenant_id: int,
     data: TenantUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_admin_user),
 ):
-    """更新租户信息：超级管理员可改任意租户，租户管理员仅可改本租户。"""
+    """更新租户信息：超级管理员可改任意租户，租户管理员仅可改本租户名称。
+
+    Q31：原实现只校验 user.tenant_id == tenant_id，无角色校验，收银员也能改
+    租户名称/编码甚至 enabled=False。现要求 admin 及以上，且编码与启用状态
+    仅平台超级管理员可变更。
+    """
     if user.role != "super" and user.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="只能修改所属租户")
     tenant = db.get(Tenant, tenant_id)
@@ -93,8 +98,20 @@ def update_tenant(
         raise HTTPException(status_code=404, detail="租户不存在")
     if tenant.code == PLATFORM_TENANT_CODE and user.role != "super":
         raise HTTPException(status_code=403, detail="平台租户不允许修改")
+    if user.role != "super":
+        # 前端编辑表单会原样回传 code / enabled，仅当值发生变化时才拒绝，
+        # 避免「只改名称」被误伤
+        payload = data.model_dump(exclude_unset=True)
+        new_code = payload.get("code")
+        if new_code and new_code.strip() != tenant.code:
+            raise HTTPException(status_code=403, detail="仅平台超级管理员可修改租户编码")
+        new_enabled = payload.get("enabled")
+        if new_enabled is not None and new_enabled != tenant.enabled:
+            raise HTTPException(status_code=403, detail="仅平台超级管理员可启用或停用租户")
     try:
-        return TenantService.update(db, tenant, data)
+        return TenantService.update(
+            db, tenant, data, allow_sensitive=(user.role == "super")
+        )
     except ValueError as exc:
         raise _to_error(exc) from exc
 

@@ -164,15 +164,22 @@ class TenantService:
         return tenant
 
     @staticmethod
-    def update(db: Session, tenant: Tenant, data: TenantUpdate) -> Tenant:
+    def update(
+        db: Session, tenant: Tenant, data: TenantUpdate, allow_sensitive: bool = True
+    ) -> Tenant:
         """更新租户信息（仅修改传入字段）。
 
         :param db: 数据库会话
         :param tenant: 待更新的租户 ORM 对象
         :param data: 更新请求体
+        :param allow_sensitive: 是否允许修改编码与启用状态（仅平台超级管理员为 True）
         :return: 已提交的租户 ORM 对象
         """
         updates = data.model_dump(exclude_unset=True)
+        # Q31：服务层再做一次防御，租户管理员即使绕过路由层也改不了敏感字段
+        if not allow_sensitive:
+            updates.pop("code", None)
+            updates.pop("enabled", None)
         if "code" in updates and updates["code"]:
             new_code = updates["code"].strip()
             if new_code != tenant.code:
