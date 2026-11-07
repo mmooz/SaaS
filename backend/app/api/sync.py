@@ -4,12 +4,23 @@ Q07：``server_time`` 统一为 naive UTC（``datetime.utcnow()``），与 SQLit
 ``func.now()`` 生成的 UTC 时间对齐；``after`` 若为带时区的 ISO 串（含 Z）先转
 naive UTC，避免本地 UTC+8 与 UTC 混用导致增量永久拉不到。
 
+R14：SQLite ``func.now()`` 只有秒精度，而 ``isoformat()`` 默认带微秒，
+``updated_at > 带微秒的游标`` 会让「与同步发生在同一秒内的写操作」永久漏同步。
+因此游标与 server_time 都截断到秒，四处增量比较统一改为 ``>=``；同秒变更会在
+下次同步重复下发一次，前端按 id upsert 幂等、无害，游标前进后自动收敛。
+
+补充（SQLAlchemy 绑定细节）：SQLite 的 ``DateTime`` 绑定格式为
+``YYYY-MM-DD HH:MM:SS.ffffff``，即便微秒为 0 也会带 ``.000000``；
+而 ``func.now()`` 落库的是无微秒字符串，直接比较秒级游标仍会被判为「小于」。
+故比较下界额外回退 1 微秒，使同秒写入稳定命中且不误拉上一秒数据
+（PostgreSQL 的 timestamp 比较同样成立）。
+
 Q19：载荷补齐 ``deleted_ids`` / ``disabled_ids`` tombstone、生效促销全量、
 租户级会员增量与启用分类；促销保持门店级（待拍板项 7 未定），会员按
 tenant_id 过滤且不含余额/积分/口令等敏感字段。
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import or_, select
@@ -29,17 +40,20 @@ router = APIRouter(prefix="/api/sync", tags=["数据同步"])
 
 
 def _naive_utc(value: datetime | None) -> datetime | None:
-    """把同步游标统一成 naive UTC，与库中 ``func.now()`` 的时间口径一致。
+    """把同步游标统一成 naive UTC 且截断到秒（R14）。
 
-    :param value: FastAPI 解析后的 after 参数（可能带时区，也可能为 naive）
-    :return: naive UTC 时间；None 表示首次全量同步
+    SQLite ``func.now()`` 生成的 ``updated_at`` 只有秒精度，旧客户端可能传来
+    带微秒或带 Z 的 ISO 串；若不截断，同秒写入会小于游标而被严格 ``>`` 永久漏掉。
+
+    :param value: FastAPI 解析后的 after 参数（可能带时区/微秒，也可能为 naive）
+    :return: naive UTC、微秒为 0 的时间；None 表示首次全量同步
     """
     if value is None:
         return None
     if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0)
     # 新版本 server_time 已是 naive UTC，旧客户端传来的 naive 值同样按 UTC 处理
-    return value
+    return value.replace(microsecond=0)
 
 
 @router.get("/products", response_model=dict)
@@ -60,7 +74,19 @@ def sync_products(
     :param store_id: 由 X-Store-Id 解析出的门店 ID
     :return: 同步载荷字典
     """
+    # R14：游标与 server_time 均为秒精度，与 SQLite func.now() 对齐。
+    # 四处增量统一用 >= ：同步时刻同秒的变更会在下一次同步重复下发一次，
+    # 前端按 id upsert 幂等、无害；游标前进到下一秒后自动收敛。
     cursor = _naive_utc(after)
+    if cursor is not None:
+        # SQLite DateTime 绑定恒带 .000000，而 func.now() 落库值无微秒，
+        # 秒级游标直接比较仍会让同秒写入落空；比较下界回退 1 微秒精确命中，
+        # 且不会误拉上一秒（游标前进后同样自动收敛）。
+        try:
+            cursor = cursor - timedelta(microseconds=1)
+        except OverflowError:
+            # 极早游标（datetime.min）已无法再回退，保持原值不影响正确性
+            pass
 
     # 1. 商品增量：只下发未删除且启用的商品；停用/删除走下面的 tombstone
     product_stmt = select(Product).where(
@@ -69,7 +95,7 @@ def sync_products(
         Product.enabled.is_(True),
     )
     if cursor:
-        product_stmt = product_stmt.where(Product.updated_at > cursor)
+        product_stmt = product_stmt.where(Product.updated_at >= cursor)
     products = db.scalars(product_stmt.order_by(Product.id)).all()
     product_list = [ProductOut.model_validate(p) for p in products]
     stocks = ProductStockService.get_map(db, [p.id for p in products], store_id)
@@ -85,7 +111,7 @@ def sync_products(
         Product.tenant_id == tenant_id, Product.deleted.is_(True)
     )
     if cursor:
-        deleted_stmt = deleted_stmt.where(Product.updated_at > cursor)
+        deleted_stmt = deleted_stmt.where(Product.updated_at >= cursor)
     deleted_ids = [str(pid) for pid in db.scalars(deleted_stmt).all()]
 
     # 3. 停用 tombstone：与软删互斥，避免同一商品出现在两个列表里
@@ -95,7 +121,7 @@ def sync_products(
         Product.enabled.is_(False),
     )
     if cursor:
-        disabled_stmt = disabled_stmt.where(Product.updated_at > cursor)
+        disabled_stmt = disabled_stmt.where(Product.updated_at >= cursor)
     disabled_ids = [str(pid) for pid in db.scalars(disabled_stmt).all()]
 
     # 4. 分类：全量下发但只保留启用分类（字段与 CategoryOut 保持一致）
@@ -139,7 +165,7 @@ def sync_products(
     # 6. 会员：租户级共享，按 updated_at 增量；输出模型不含余额/积分/口令
     member_stmt = select(Member).where(Member.tenant_id == tenant_id)
     if cursor:
-        member_stmt = member_stmt.where(Member.updated_at > cursor)
+        member_stmt = member_stmt.where(Member.updated_at >= cursor)
     members = [
         MemberSyncOut.model_validate(m)
         for m in db.scalars(member_stmt.order_by(Member.id)).all()
@@ -152,6 +178,6 @@ def sync_products(
         "disabled_ids": disabled_ids,
         "promotions": promotions,
         "members": members,
-        # Q07：naive UTC，与 SQLite func.now() 对齐，不再用本地时间 datetime.now()
-        "server_time": datetime.utcnow().isoformat(),
+        # Q07/R14：naive UTC 且截断到秒，与 SQLite func.now() 的秒精度对齐
+        "server_time": datetime.utcnow().replace(microsecond=0).isoformat(),
     }
