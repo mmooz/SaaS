@@ -1,3 +1,5 @@
+import { getDeviceWorkerId } from './deviceId.js'
+
 /**
  * 雪花 ID 生成器（前端离线使用）
  *
@@ -23,10 +25,11 @@ export class Snowflake {
 
   /**
    * 初始化离线 ID 生成器
-   * @param {number} workerId 机器 ID（0-31），桌面端固定使用 2 以区分后端
+   * @param {number} workerId 机器 ID（0-31），Q29：默认由持久化设备 ID 派生，
+   *   不再所有 POS 固定为 2；仍可显式传入以兼容既有调用
    * @param {number} datacenterId 数据中心 ID（0-31）
    */
-  constructor(workerId = 2, datacenterId = 1) {
+  constructor(workerId = getDeviceWorkerId(), datacenterId = 1) {
     // 机器与数据中心标识（BigInt）
     this.workerId = BigInt(workerId)
     this.datacenterId = BigInt(datacenterId)

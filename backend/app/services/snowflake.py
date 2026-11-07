@@ -8,6 +8,7 @@ import threading
 import time
 
 from app.config import settings
+from app.services.worker_id_allocator import allocate_worker_id
 
 
 class Snowflake:
@@ -94,8 +95,16 @@ class Snowflake:
             )
 
 
-# 进程内单例生成器：机器位来自配置，便于多实例部署时区分
-_snowflake = Snowflake(settings.snowflake_worker_id, settings.snowflake_datacenter_id)
+# 进程内单例生成器（Q29）：机器位不再取固定配置值，而是在系统临时目录
+# 用跨进程文件锁抢占 0-31 中未占用的编号，进程存活期间持锁；抢不到时
+# 由分配器回退到 SNOWFLAKE_WORKER_ID / 配置默认值并给出明确警告。
+# 分配器保证任何情况下都不抛异常，因此 alembic/env.py 导入模型的路径不受影响。
+_snowflake = Snowflake(
+    allocate_worker_id(
+        settings.snowflake_datacenter_id, settings.snowflake_worker_id
+    ),
+    settings.snowflake_datacenter_id,
+)
 
 
 def next_id() -> int:
