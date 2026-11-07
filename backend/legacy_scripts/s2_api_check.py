@@ -9,13 +9,16 @@ BASE = "http://127.0.0.1:8000"
 PASS = 0
 FAIL = 0
 
-# 测试前清理数据库（直接操作 SQLite，保证测试幂等）
-conn = sqlite3.connect("pos.db")
-conn.execute("DELETE FROM product_price_history")
-conn.execute("DELETE FROM products")
-conn.execute("DELETE FROM categories")
-conn.commit()
-conn.close()
+# [Q27-a 止血] 以下模块顶层清库语句已禁用：
+# 原逻辑在 pytest 收集阶段（import 时）就会执行 sqlite3.connect("pos.db") + DELETE + commit，
+# 且相对路径不受 DATABASE_URL 控制，会直接删掉当前工作目录下的真实 pos.db。
+# 原语句保留为注释，供 B5 / Q27-b 重写为「独立内存库 fixture」真实用例时参考：
+# conn = sqlite3.connect("pos.db")
+# conn.execute("DELETE FROM product_price_history")
+# conn.execute("DELETE FROM products")
+# conn.execute("DELETE FROM categories")
+# conn.commit()
+# conn.close()
 
 
 def check(name, cond, extra=""):
