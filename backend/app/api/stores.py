@@ -170,6 +170,13 @@ def revoke_store_access(
 ):
     """撤销用户对指定门店的访问权限（仅管理员）。"""
     _require_admin(user)
+    # Q09：与 grant_store_access 一致，先校验门店属于当前租户，
+    # 否则任意租户管理员传入他店 store_id 即可删除对方的用户-门店授权
+    store = db.scalar(
+        select(Store).where(Store.id == store_id, Store.tenant_id == tenant_id)
+    )
+    if not store:
+        raise HTTPException(status_code=404, detail="门店不存在")
     db.execute(
         delete(UserStore).where(
             UserStore.user_id == user_id, UserStore.store_id == store_id
