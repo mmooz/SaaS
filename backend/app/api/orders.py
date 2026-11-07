@@ -109,9 +109,16 @@ def create_order(
     store_id: int = Depends(get_store_id),
 ):
     """收银端上传订单：按 order_no 幂等去重，重复上传返回已存在的订单。"""
-    # 幂等检查：订单号已存在则直接返回（收银端离线重传场景）
+    # Q03 幂等检查：order_no 有全局唯一约束，必须先按单号全局查一次。
+    # 命中但租户/门店上下文不同 -> 409 冲突（既不能把他人订单当幂等结果返回，
+    # 也不能走到新建分支撞唯一索引报 500）；上下文相同 -> 幂等返回原单。
     existing = db.scalar(select(Order).where(Order.order_no == data.order_no))
     if existing:
+        if existing.tenant_id != tenant_id or existing.store_id != store_id:
+            raise HTTPException(
+                status_code=409,
+                detail="订单号已被其它门店或租户使用，请更换单号后重试",
+            )
         return _serialize(db, [existing])[0]
 
     # 创建订单主记录（离线补传时沿用收银端生成的 ID 与下单时间；租户/门店以当前上下文为准）
@@ -226,17 +233,29 @@ def refund_order(
     _user: User = Depends(get_manager_user),
 ):
     """订单退款/退货：整单退款或按明细退货，自动回滚库存与储值余额。"""
+    # Q03：补 tenant_id 过滤，确保原订单确属当前租户+门店上下文
     order = db.scalar(
-        select(Order).where(Order.order_no == order_no, Order.store_id == store_id)
+        select(Order).where(
+            Order.order_no == order_no,
+            Order.tenant_id == tenant_id,
+            Order.store_id == store_id,
+        )
     )
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
-    # 幂等检查：离线补传的退款单号已存在则直接返回原记录
+    # Q03 幂等检查：refund_no 同样有全局唯一约束，先按单号全局查一次。
+    # 命中但租户/原订单上下文不同 -> 409 冲突（防串单、防撞唯一索引 500）；
+    # 上下文相同 -> 幂等返回原退款单。
     if data.refund_no:
         existing = db.scalar(
             select(RefundRecord).where(RefundRecord.refund_no == data.refund_no)
         )
         if existing:
+            if existing.tenant_id != tenant_id or existing.order_id != order.id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="退款单号已被其它订单或租户使用，请更换单号后重试",
+                )
             return existing
     try:
         record = RefundService.refund(db, order, data, tenant_id=tenant_id)
