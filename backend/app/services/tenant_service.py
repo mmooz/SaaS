@@ -141,13 +141,16 @@ class TenantService:
             exists = db.scalar(select(User.id).where(User.username == username))
             if exists is not None:
                 raise ValueError("管理员账号已存在")
+            # Q08：初始管理员密码必须由调用方显式提供且满足强度，禁止回退固定弱口令
+            if not admin_password or len(admin_password.strip()) < 8:
+                raise ValueError("创建初始管理员必须设置至少 8 位的密码")
             store = Store(tenant_id=tenant.id, name=DEFAULT_STORE_NAME, enabled=True)
             db.add(store)
             db.flush()
             user = User(
                 tenant_id=tenant.id,
                 username=username,
-                password_hash=PasswordHasher.hash(admin_password or "123456"),
+                password_hash=PasswordHasher.hash(admin_password),
                 name=(admin_name or username).strip(),
                 role="admin",
                 enabled=True,

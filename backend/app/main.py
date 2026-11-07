@@ -23,10 +23,13 @@ from app.api import (
     tenants,
     users,
 )
-from app.config import settings
+from app.config import settings, validate_startup_security
 from app.database import Base, SessionLocal, engine
 from app import models  # 导入模型模块，确保建表时注册所有表
 from app.services.user_seeder import UserSeeder
+
+# 应用加载即强校验安全配置：未注入 AUTH_SECRET 或密钥过短时直接拒绝启动
+validate_startup_security()
 
 
 @asynccontextmanager
