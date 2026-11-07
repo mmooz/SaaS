@@ -16,18 +16,17 @@ class OrderCreate(BaseModel):
     created_at: datetime | None = None
     # 订单号（收银端生成，唯一，用于幂等去重）
     order_no: str = Field(..., min_length=1, max_length=32)
-    # 预留门店 ID（多店扩展）
-    store_id: int = 1
+    # Q22：门店 ID 由 X-Store-Id 上下文决定，不再接受请求体指定
     # 收银员用户 ID
     cashier_id: int | None = None
     # 交接班会话 ID
     shift_id: int | None = None
-    # 订单状态：pending/paid/refunded
-    status: str = Field("paid", pattern="^(pending|paid|refunded)$")
+    # 订单状态：客户端只能创建待支付/已支付单，退款状态由退款流程写入
+    status: str = Field("paid", pattern="^(pending|paid)$")
     # 应收总额
     total_amount: float = Field(0, ge=0)
-    # 优惠金额
-    discount_amount: float = 0
+    # 优惠金额（Q22：不得为负）
+    discount_amount: float = Field(0, ge=0)
     # 支付方式明细（JSON 字符串或原始字符串）
     pay_details: str | None = None
     # 关联会员 ID

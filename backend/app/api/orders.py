@@ -1,6 +1,7 @@
 """订单管理 API：订单上传（幂等）、查询与退款退货。"""
 
-from datetime import datetime
+import json
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
@@ -8,7 +9,16 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.dependencies import get_manager_user, get_store_id, get_tenant_id
-from app.models import Member, Order, OrderItem, RefundItem, RefundRecord, User
+from app.models import (
+    Member,
+    Order,
+    OrderItem,
+    Product,
+    RefundItem,
+    RefundRecord,
+    ShiftSession,
+    User,
+)
 from app.schemas.order_create import OrderCreate
 from app.schemas.order_out import OrderOut
 from app.schemas.refund_create import RefundCreate
@@ -101,6 +111,90 @@ def _serialize(
     return result
 
 
+def _validate_order_payload(
+    db: Session, data: OrderCreate, tenant_id: int, store_id: int
+) -> None:
+    """Q22：校验订单上传载荷，杜绝伪造营收、挂他人班次与跨租户关联 ID。
+
+    兼容性说明（与 POS ``posStore.js`` 对齐，不可照搬「total == Σ明细 − discount」）：
+    前端 ``discount_amount`` 是「零售价合计 − 实收」，含会员价/特价优惠，而明细
+    金额已是成交价，两者不构成恒等式。因此只校验「实收不得超过明细合计」这一
+    上界（整单满减只会减少），并额外校验支付明细金额之和与实收一致。
+
+    :param db: 数据库会话
+    :param data: 订单上传请求体
+    :param tenant_id: 由依赖解析出的租户 ID
+    :param store_id: 由 X-Store-Id 解析出的门店 ID
+    :raises HTTPException: 载荷不合法时返回 400 或 409
+    """
+    # 1. 金额上界：防止凭空指定 total_amount 污染营收报表
+    item_total = round(sum(float(i.amount or 0) for i in data.items), 2)
+    if data.total_amount > item_total + 0.01:
+        raise HTTPException(
+            status_code=400,
+            detail=f"订单金额 {data.total_amount} 超过明细合计 {item_total}",
+        )
+
+    # 2. 支付方式金额之和须与实收一致（POS 传 JSON 对象，如 {"现金": 100.0}）
+    if data.pay_details:
+        try:
+            pay = json.loads(data.pay_details)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="pay_details 必须是合法 JSON") from exc
+        if not isinstance(pay, dict):
+            raise HTTPException(status_code=400, detail="pay_details 必须是支付方式金额对象")
+        try:
+            paid = round(sum(float(v or 0) for v in pay.values()), 2)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="pay_details 中的金额不合法") from exc
+        if abs(paid - data.total_amount) > 0.01:
+            raise HTTPException(status_code=400, detail="支付方式金额合计与订单金额不一致")
+
+    # 3. 下单时间可早（离线补传）但不可晚于当前时间；POS 传的是带 Z 的 ISO 串，
+    #    Pydantic 解析为 aware datetime，此处统一按 UTC 比较避免 naive/aware 冲突
+    if data.created_at is not None:
+        created = data.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if created > datetime.now(timezone.utc) + timedelta(minutes=5):
+            raise HTTPException(status_code=400, detail="下单时间不能晚于当前时间")
+
+    # 4. 自定义主键冲突提前拦截，避免 IntegrityError 变成 500
+    if data.id is not None and db.get(Order, data.id) is not None:
+        raise HTTPException(status_code=409, detail="订单主键已存在")
+    item_ids = [i.id for i in data.items if i.id is not None]
+    if item_ids and db.scalar(
+        select(OrderItem.id).where(OrderItem.id.in_(item_ids)).limit(1)
+    ) is not None:
+        raise HTTPException(status_code=409, detail="订单明细主键已存在")
+
+    # 5. 关联 ID 的租户归属校验
+    if data.cashier_id is not None:
+        cashier = db.get(User, data.cashier_id)
+        if not cashier or cashier.tenant_id != tenant_id:
+            raise HTTPException(status_code=400, detail="收银员不属于当前租户")
+    if data.shift_id is not None:
+        shift = db.get(ShiftSession, data.shift_id)
+        # 离线本地班次可能尚未补传到后端，无记录时放行（Q26 在 B2 固化归属）
+        if shift and (shift.tenant_id != tenant_id or shift.store_id != store_id):
+            raise HTTPException(status_code=400, detail="班次不属于当前租户或门店")
+    if data.member_id is not None:
+        member = db.get(Member, data.member_id)
+        if not member or member.tenant_id != tenant_id:
+            raise HTTPException(status_code=400, detail="会员不属于当前租户")
+    product_ids = {i.product_id for i in data.items if i.product_id is not None}
+    if product_ids:
+        owned = set(
+            db.scalars(
+                select(Product.id).where(
+                    Product.id.in_(product_ids), Product.tenant_id == tenant_id
+                )
+            ).all()
+        )
+        if owned != product_ids:
+            raise HTTPException(status_code=400, detail="订单明细包含不属于当前租户的商品")
+
+
 @router.post("", response_model=OrderOut, status_code=201)
 def create_order(
     data: OrderCreate,
@@ -120,6 +214,9 @@ def create_order(
                 detail="订单号已被其它门店或租户使用，请更换单号后重试",
             )
         return _serialize(db, [existing])[0]
+
+    # Q22：服务端校验载荷，金额、支付方式与关联 ID 不再照单全收
+    _validate_order_payload(db, data, tenant_id, store_id)
 
     # 创建订单主记录（离线补传时沿用收银端生成的 ID 与下单时间；租户/门店以当前上下文为准）
     order_kwargs = {
