@@ -19,6 +19,7 @@ import {
 } from '../api.js'
 import { offlineStore } from '../services/offline/OfflineStore.js'
 import { offlineSnowflake } from '../services/offline/Snowflake.js'
+import { getDeviceId } from '../services/offline/deviceId.js'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
@@ -405,10 +406,15 @@ export const usePosStore = defineStore('pos', {
       // 优惠金额 = 零售价合计 − 实收合计（含会员价/特价/满减）
       const discount = +(this.retailAmount - total).toFixed(2)
       const payDetails = JSON.stringify({ [payload.payMethod]: total })
+      // Q26：固化「结算发生时」的门店与可取得的租户，写入订单本体。
+      // saveLocalOrder 与离线队列项都基于这个 order 展开，切到别的门店补传时
+      // 仍按 store_id 指定单次请求的 X-Store-Id，订单不会被记到当前登录门店。
       const order = {
         id: offlineSnowflake.nextId(),
         order_no: orderNo,
         created_at: now,
+        store_id: getCurrentStore() || null,
+        tenant_id: this.cashier && this.cashier.tenant_id ? this.cashier.tenant_id : null,
         cashier_id: this.cashier ? this.cashier.id : null,
         shift_id: this.shiftId,
         status: 'paid',
@@ -461,8 +467,8 @@ export const usePosStore = defineStore('pos', {
             pendingShifts.map((shift) => ({
               id: shift.shift_id,
               cashier_id: shift.cashier_id,
-              // 使用当前登录门店，避免补传数据落到错误门店
-              store_id: getCurrentStore() || null,
+              // Q26：用班次快照固化的发生门店；旧库无该字段时回退当前门店
+              store_id: shift.store_id || getCurrentStore() || null,
               start_at: shift.start_at,
               end_at: shift.end_at,
               base_cash: Number(shift.base_cash) || 0,
@@ -516,17 +522,20 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 生成本地订单号：yyyyMMdd-HHmmss-序号（含时间戳避免与历史订单冲突）
+     * 生成本地订单号：<8位设备ID>-<yyyyMMddHHmmss>-<5位序号>
+     * Q26：叠加持久化设备标识，两台设备同秒同序号不再产生相同单号；
+     * 总长 8+1+14+1+5 = 29 字符，未超过后端 order_no 的 String(32) 限制。
+     * 序号仍保留（可读性与本地排序），但不再是唯一性来源。
      */
     buildOrderNo() {
       const d = new Date()
-      const pad = (n) => String(n).padStart(2, '0')
+      const pad = (n, len = 2) => String(n).padStart(len, '0')
       const date = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
       const time = `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
       const key = 'pos_order_seq'
       const seq = (parseInt(localStorage.getItem(key) || '0', 10) + 1) % 100000
       localStorage.setItem(key, String(seq))
-      return `${date}-${time}-${String(seq).padStart(5, '0')}`
+      return `${getDeviceId()}-${date}${time}-${pad(seq, 5)}`
     },
 
     /**

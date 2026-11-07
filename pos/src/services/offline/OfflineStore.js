@@ -1,4 +1,5 @@
 import Database from '@tauri-apps/plugin-sql'
+import { getCurrentStore } from '../../api.js'
 
 // 本地 SQLite 数据库文件（由 Tauri SQL 插件写入应用数据目录）
 const DB_PATH = 'sqlite:pos-offline.db'
@@ -21,6 +22,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS local_shifts (
     shift_id TEXT PRIMARY KEY,
     cashier_id TEXT,
+    store_id TEXT,
     start_at TEXT NOT NULL,
     end_at TEXT,
     base_cash REAL DEFAULT 0,
@@ -32,6 +34,10 @@ const SCHEMA = [
   'CREATE INDEX IF NOT EXISTS idx_queue_kind ON offline_queue(kind, created_at)',
   'CREATE INDEX IF NOT EXISTS idx_orders_shift ON local_orders(created_at)',
 ]
+
+// Q26：兼容旧库的增量列。旧库已存在同名列时 SQLite 会报错，逐条 try/catch 忽略，
+// 不引入 Alembic 之外的迁移框架，也不改动既有行数据。
+const MIGRATIONS = ['ALTER TABLE local_shifts ADD COLUMN store_id TEXT']
 
 /**
  * 离线数据仓库：桌面端使用 Tauri SQLite，浏览器环境使用 localStorage 兜底。
@@ -69,6 +75,14 @@ export class OfflineStore {
         this.db = await Database.load(DB_PATH)
         for (const sql of SCHEMA) {
           await this.db.execute(sql)
+        }
+        // 旧库补列：已存在该列时忽略错误，保证初始化不被打断
+        for (const sql of MIGRATIONS) {
+          try {
+            await this.db.execute(sql)
+          } catch {
+            // 列已存在，无需处理
+          }
         }
       } catch (err) {
         // 插件不可用时退化为本地存储，保证收银不中断
@@ -298,9 +312,16 @@ export class OfflineStore {
    */
   async saveLocalShift(shift) {
     await this.init()
+    // Q26：固化快照写入（开班/交班发生）时的门店。调用方未显式传入时，
+    // 由离线仓库统一从当前门店兜底，避免改动 4 个视图调用点造成遗漏。
+    const rawStoreId =
+      shift.store_id !== undefined && shift.store_id !== null && String(shift.store_id) !== ''
+        ? String(shift.store_id)
+        : getCurrentStore() || null
     const row = {
       shift_id: shift.id,
       cashier_id: shift.cashier_id || null,
+      store_id: rawStoreId,
       start_at: shift.start_at,
       end_at: shift.end_at || null,
       base_cash: Number(shift.base_cash) || 0,
@@ -310,14 +331,16 @@ export class OfflineStore {
       synced: shift.synced ? 1 : 0,
     }
     if (!this.tauri) {
+      // 浏览器兜底为对象存储，直接写入新字段，无需迁移
       this.memory.shifts[row.shift_id] = row
       this.saveMemory()
       return
     }
     await this.db.execute(
-      `INSERT INTO local_shifts(shift_id, cashier_id, start_at, end_at, base_cash, total_sales, order_count, status, synced)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO local_shifts(shift_id, cashier_id, store_id, start_at, end_at, base_cash, total_sales, order_count, status, synced)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(shift_id) DO UPDATE SET
+         store_id = COALESCE(local_shifts.store_id, excluded.store_id),
          end_at = excluded.end_at,
          base_cash = excluded.base_cash,
          total_sales = excluded.total_sales,
@@ -327,6 +350,7 @@ export class OfflineStore {
       [
         row.shift_id,
         row.cashier_id,
+        row.store_id,
         row.start_at,
         row.end_at,
         row.base_cash,

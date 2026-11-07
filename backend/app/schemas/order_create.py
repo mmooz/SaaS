@@ -16,7 +16,11 @@ class OrderCreate(BaseModel):
     created_at: datetime | None = None
     # 订单号（收银端生成，唯一，用于幂等去重）
     order_no: str = Field(..., min_length=1, max_length=32)
-    # Q22：门店 ID 由 X-Store-Id 上下文决定，不再接受请求体指定
+    # Q26：离线补传时携带的「结算发生时」门店，仅用于与 X-Store-Id 做一致性校验，
+    # 绝不作为订单归属数据来源（落库门店仍以 get_store_id 解析结果为准）
+    store_id: str | int | None = None
+    # 离线端本地记录的租户标识（服务端忽略，由上下文决定租户）
+    tenant_id: str | int | None = None
     # 收银员用户 ID
     cashier_id: int | None = None
     # 交接班会话 ID

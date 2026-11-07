@@ -82,22 +82,27 @@ export function clearStoreInfo() {
 
 /**
  * 发起 JSON 请求
+ * Q26：支持 options.headers 覆盖单次请求的头（如按订单固化门店覆盖 X-Store-Id），
+ * 但绝不修改全局「当前门店」缓存，其它请求仍使用原门店上下文。
  * @param {string} path 接口路径
- * @param {object} options fetch 选项
+ * @param {object} options fetch 选项（可含 headers）
  * @returns {Promise<any>} 解析后的响应数据
  */
 async function request(path, options = {}) {
   const token = getAuthToken()
   const storeId = getCurrentStore()
+  const { headers: extraHeaders, ...restOptions } = options
   const res = await fetch(`${BASE_URL}${path}`, {
+    ...restOptions,
     headers: {
       'Content-Type': 'application/json',
       // 已登录时自动携带令牌，供后端识别当前用户
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       // 已选门店时携带门店 ID，供后端做门店数据隔离
       ...(storeId ? { 'X-Store-Id': storeId } : {}),
+      // 单次覆盖（Q26：离线补传按发生时门店指定）
+      ...(extraHeaders || {}),
     },
-    ...options,
   })
   // 令牌失效统一处理：清除登录态并回到登录页
   if (res.status === 401 && token) {
@@ -154,13 +159,20 @@ export function fetchSyncData(after = null) {
 
 /**
  * 上传订单到服务端
- * @param {object} order 订单数据
+ * Q26：按订单载荷中固化的 store_id 覆盖本次请求的 X-Store-Id，
+ * 使 A 店离线产生的订单在切到 B 店补传时仍落到 A 店；不修改全局当前门店。
+ * @param {object} order 订单数据（含发生时的 store_id）
  * @returns {Promise<object>} 已保存的订单
  */
 export function uploadOrder(order) {
+  const fixedStoreId =
+    order && order.store_id !== null && order.store_id !== undefined && String(order.store_id) !== ''
+      ? String(order.store_id)
+      : ''
   return request('/api/orders', {
     method: 'POST',
     body: JSON.stringify(order),
+    headers: fixedStoreId ? { 'X-Store-Id': fixedStoreId } : {},
   })
 }
 
@@ -312,14 +324,33 @@ export function fetchShiftSummary(shiftId) {
 
 /**
  * 批量补传离线班次
+ * Q26：按每条班次快照固化的 store_id 分组，每组用该门店覆盖 X-Store-Id，
+ * 既让载荷门店与 Q04 的服务端上下文校验一致，又保证 A 店班次在 B 店补传时
+ * 仍落到 A 店；不改全局当前门店。旧快照无 store_id 时归到当前门店组。
  * @param {Array<object>} shifts 班次快照列表
- * @returns {Promise<{synced:number}>} 处理结果
+ * @returns {Promise<{synced:number}>} 各组处理结果汇总
  */
 export function syncShifts(shifts) {
-  return request('/api/shifts/sync', {
-    method: 'POST',
-    body: JSON.stringify({ shifts }),
-  })
+  const groups = new Map()
+  for (const shift of shifts || []) {
+    const key =
+      shift && shift.store_id !== null && shift.store_id !== undefined && String(shift.store_id) !== ''
+        ? String(shift.store_id)
+        : ''
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(shift)
+  }
+  const tasks = [...groups.entries()].map(([storeId, items]) =>
+    request('/api/shifts/sync', {
+      method: 'POST',
+      body: JSON.stringify({ shifts: items }),
+      headers: storeId ? { 'X-Store-Id': storeId } : {},
+    }),
+  )
+  if (!tasks.length) return Promise.resolve({ synced: 0 })
+  return Promise.all(tasks).then((results) => ({
+    synced: results.reduce((sum, res) => sum + (Number(res && res.synced) || 0), 0),
+  }))
 }
 
 /**

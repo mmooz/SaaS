@@ -194,6 +194,21 @@ def _validate_order_payload(
         if owned != product_ids:
             raise HTTPException(status_code=400, detail="订单明细包含不属于当前租户的商品")
 
+    # 6. Q26：离线补传载荷中固化的发生门店必须与 X-Store-Id 上下文一致。
+    #    注意这是 B1 之后的行为变化：B1 验收「请求体 store_id 被忽略、订单仍落 A1」，
+    #    本组改为「传了就必须一致」，防止客户端用 A 店上下文把订单错挂到 B 店。
+    #    store_id 只做校验，落库门店仍取 get_store_id 解析出的上下文值。
+    if data.store_id is not None and str(data.store_id).strip():
+        try:
+            payload_store_id = int(str(data.store_id).strip())
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="订单载荷 store_id 不合法") from exc
+        if payload_store_id != store_id:
+            raise HTTPException(
+                status_code=400,
+                detail="订单载荷门店与 X-Store-Id 不一致，拒绝上传",
+            )
+
 
 @router.post("", response_model=OrderOut, status_code=201)
 def create_order(
