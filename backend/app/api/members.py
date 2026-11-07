@@ -16,6 +16,8 @@ from app.schemas.member_points_adjust import MemberPointsAdjust
 from app.schemas.member_recharge import MemberRecharge
 from app.schemas.member_transaction_out import MemberTransactionOut
 from app.schemas.member_update import MemberUpdate
+from app.services.operation_log_service import OperationLogService
+from app.services.setting_service import MAX_RECHARGE_AMOUNT, SettingService
 
 # 会员路由
 router = APIRouter(prefix="/api/members", tags=["会员管理"])
@@ -265,15 +267,24 @@ def recharge_member(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    user: User = Depends(get_manager_user),
 ):
     """会员储值充值：增加余额并写入充值流水（流水记录发生门店）。"""
     member = _get_member(db, member_id, tenant_id)
-    # 增加储值余额（充值金额 + 赠送金额）
+    # Q02：单笔充值金额（含赠金）上限，防止越权大额充值造成资损
     credit = round(data.amount + data.gift_amount, 2)
+    if credit > MAX_RECHARGE_AMOUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"单笔充值金额不得超过 {MAX_RECHARGE_AMOUNT:.0f} 元",
+        )
+    # Q02：赠送积分由服务端 system_settings 配置读取，忽略客户端传值
+    _, bonus_per_yuan = SettingService.get_member_point_config(db, tenant_id, store_id)
+    bonus_points = int(data.amount * bonus_per_yuan)
+    # 增加储值余额（充值金额 + 赠送金额）
     member.balance = round((member.balance or 0) + credit, 2)
-    # 活动赠送积分（如有）
-    if data.bonus_points:
-        member.points = (member.points or 0) + data.bonus_points
+    if bonus_points:
+        member.points = (member.points or 0) + bonus_points
     db.add(
         MemberTransaction(
             tenant_id=tenant_id,
@@ -281,9 +292,17 @@ def recharge_member(
             member_id=member.id,
             type="recharge",
             amount=credit,
-            points=data.bonus_points,
-            operator_id=data.operator_id,
+            points=bonus_points,
+            operator_id=user.id,
         )
+    )
+    # Q02：充值属于资金操作，写入操作日志（复用登录/退款/改设置的写法）
+    OperationLogService.record(
+        db,
+        "会员充值",
+        f"会员 {member.mobile} 充值 {data.amount:.2f} 元、赠金 {data.gift_amount:.2f} 元、赠送积分 {bonus_points}",
+        user.id,
+        tenant_id=tenant_id,
     )
     db.commit()
     db.refresh(member)
@@ -297,6 +316,7 @@ def consume_member(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    user: User = Depends(get_manager_user),
 ):
     """会员消费：扣减储值余额、累计消费额并奖励积分（流水记录发生门店）。"""
     member = _get_member(db, member_id, tenant_id)
@@ -306,8 +326,10 @@ def consume_member(
 
     member.balance = round((member.balance or 0) - data.amount, 2)
     member.total_spent = round((member.total_spent or 0) + data.amount, 2)
+    # Q02：积分换算比例由服务端 system_settings 配置读取，客户端传值一律忽略
+    points_per_yuan, _ = SettingService.get_member_point_config(db, tenant_id, store_id)
     # 按消费金额换算积分（向下取整）
-    earned = int(data.amount * data.points_per_yuan)
+    earned = int(data.amount * points_per_yuan)
     member.points = (member.points or 0) + earned
     db.add(
         MemberTransaction(
@@ -317,8 +339,16 @@ def consume_member(
             type="consume",
             amount=-data.amount,
             points=earned,
-            operator_id=data.operator_id,
+            operator_id=user.id,
         )
+    )
+    # Q02：储值消费属于资金操作，写入操作日志
+    OperationLogService.record(
+        db,
+        "会员消费",
+        f"会员 {member.mobile} 储值消费 {data.amount:.2f} 元，获得积分 {earned}",
+        user.id,
+        tenant_id=tenant_id,
     )
     db.commit()
     db.refresh(member)
