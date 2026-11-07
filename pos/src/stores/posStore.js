@@ -540,6 +540,8 @@ export const usePosStore = defineStore('pos', {
      * 补传离线数据：依次上传班次 → 订单 → 退款（保证退款引用的订单已存在）
      * Q25：按 isNetworkError 分流——网络错误才 break 保留队列；业务错误（4xx/5xx）
      * 记录失败原因并把该项移到死信队列，从主队列移除后继续处理后续项，不再吞整批。
+     * R13：班次按门店分组判定，成功分组不被失败分组牵连；网络错误不再提前 return，
+     * 订单与退款补传始终继续执行。
      * @returns {Promise<{uploaded:number, deadLettered:number}>} 成功补传数与本次隔离到死信的项数
      */
     async flushOfflineOrders() {
@@ -560,24 +562,29 @@ export const usePosStore = defineStore('pos', {
           order_count: Number(shift.order_count) || 0,
           status: shift.status,
         }))
-        try {
-          await syncShifts(shiftPayloads)
-          for (const shift of pendingShifts) {
-            await offlineStore.markShiftSynced(shift.shift_id)
+        // R13：syncShifts 返回分组级结果，逐组判定成败。
+        // 一个门店分组 403 不再让已成功上传的分组一起进死信；网络错误也不再 return，
+        // 后续订单/退款补传照常尝试（Q25「不阻断」）。
+        const { groups } = await syncShifts(shiftPayloads)
+        for (const group of groups || []) {
+          const groupShifts = group.items || []
+          if (group.ok) {
+            // 成功分组：只标记本组班次已同步，绝不进死信
+            for (const shift of groupShifts) {
+              await offlineStore.markShiftSynced(shift.id)
+            }
+            continue
           }
-        } catch (err) {
+          const err = group.error
           if (isNetworkError(err)) {
-            // 网络不可用：保持未同步状态，下次启动再补传
-            await this.reloadOfflineOrders()
-            return { uploaded: 0, deadLettered: 0 }
+            // 该组网络不可用：保持未同步（listPendingShifts 仍能查到），不进死信、不中断
+            continue
           }
-          // 业务错误：整批隔离到死信队列，不阻断后续订单/退款补传
-          const reason = `班次补传被服务端拒绝：${err.status ?? ''} ${err.message || '未知错误'}`
-          for (let i = 0; i < pendingShifts.length; i += 1) {
-            await offlineStore.moveToDeadLetter(
-              'shift', pendingShifts[i].shift_id, shiftPayloads[i], reason,
-            )
-            await offlineStore.markShiftSynced(pendingShifts[i].shift_id)
+          // 业务错误：只把该分组的班次隔离到死信，reason 带 status 与错误文案
+          const reason = `班次补传被服务端拒绝：${err?.status ?? ''} ${err?.message || '未知错误'}`
+          for (const shift of groupShifts) {
+            await offlineStore.moveToDeadLetter('shift', shift.id, shift, reason)
+            await offlineStore.markShiftSynced(shift.id)
             deadLettered += 1
           }
         }

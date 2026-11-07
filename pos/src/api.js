@@ -351,8 +351,12 @@ export function fetchShiftSummary(shiftId) {
  * Q26：按每条班次快照固化的 store_id 分组，每组用该门店覆盖 X-Store-Id，
  * 既让载荷门店与 Q04 的服务端上下文校验一致，又保证 A 店班次在 B 店补传时
  * 仍落到 A 店；不改全局当前门店。旧快照无 store_id 时归到当前门店组。
+ *
+ * R13：用 Promise.allSettled 逐组收敛结果，绝不因单个分组失败整体 reject。
+ * 调用方按 groups[].ok 判定每个门店的成败，避免已成功上传的分组被一起误伤。
  * @param {Array<object>} shifts 班次快照列表
- * @returns {Promise<{synced:number}>} 各组处理结果汇总
+ * @returns {Promise<{synced:number, groups:Array<{storeId:string, items:Array<object>, ok:boolean, error:Error|null}>}>}
+ *   成功分组累计的 synced 与各分组结果（失败时 error 为原始异常，供 isNetworkError 判定）
  */
 export function syncShifts(shifts) {
   const groups = new Map()
@@ -364,17 +368,28 @@ export function syncShifts(shifts) {
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(shift)
   }
-  const tasks = [...groups.entries()].map(([storeId, items]) =>
+  const entries = [...groups.entries()]
+  if (!entries.length) return Promise.resolve({ synced: 0, groups: [] })
+  const tasks = entries.map(([storeId, items]) =>
     request('/api/shifts/sync', {
       method: 'POST',
       body: JSON.stringify({ shifts: items }),
       headers: storeId ? { 'X-Store-Id': storeId } : {},
     }),
   )
-  if (!tasks.length) return Promise.resolve({ synced: 0 })
-  return Promise.all(tasks).then((results) => ({
-    synced: results.reduce((sum, res) => sum + (Number(res && res.synced) || 0), 0),
-  }))
+  return Promise.allSettled(tasks).then((settled) => {
+    let synced = 0
+    const results = settled.map((res, index) => {
+      const [storeId, items] = entries[index]
+      if (res.status === 'fulfilled') {
+        synced += Number(res.value && res.value.synced) || 0
+        return { storeId, items, ok: true, error: null }
+      }
+      // 保留原始异常对象（ApiError 带 status / TypeError 网络异常），供调用方分流
+      return { storeId, items, ok: false, error: res.reason }
+    })
+    return { synced, groups: results }
+  })
 }
 
 /**
