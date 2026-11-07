@@ -16,11 +16,14 @@ router = APIRouter(prefix="/api/stores", tags=["门店管理"])
 
 
 def _require_admin(user: User) -> None:
-    """校验当前用户是否为管理员，否则抛 403。
+    """校验当前用户是否为租户管理员及以上（admin / super），否则抛 403。
+
+    Q33：平台超级管理员此前被挡在门店管理接口之外，与 get_admin_user 的权限
+    层级保持一致；跨租户操作仍需显式携带 X-Tenant-Id。
 
     :param user: 当前登录用户
     """
-    if user.role != "admin":
+    if user.role not in ("admin", "super"):
         raise HTTPException(status_code=403, detail="仅管理员可操作门店")
 
 

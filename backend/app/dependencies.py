@@ -1,19 +1,31 @@
-"""全局依赖：从令牌解析当前用户、租户与门店，供业务接口做数据隔离。"""
+"""全局依赖：从数据库解析当前用户、租户与门店上下文，供业务接口做数据隔离。
+
+B1 / Q10：``tenant_id`` 不再取自令牌载荷 ``tid``（旧实现只验签不查库，掌握密钥者
+可自签任意 tid 跨租户读数据），统一以数据库中的 ``user.tenant_id`` 为准并校验
+``Tenant.enabled``；停用租户后已签发令牌立即失效。
+
+B1 / Q30：平台超级管理员默认仍只属于平台租户，只有主动携带 ``X-Tenant-Id``
+（目标业务租户，校验存在且启用）+ ``X-Store-Id`` 时才切换到该租户的门店上下文；
+普通用户传入 ``X-Tenant-Id`` 一律忽略，避免成为新的越权入口。
+
+B1 / Q33：角色层级统一为 super > admin > manager > cashier，要求 admin / manager
+的接口显式放行 super；跨租户整库备份仍只归 super（见 api/backups.py）。
+"""
 
 from fastapi import Depends, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.auth import token_service, _current_user
+from app.api.auth import _current_user
 from app.database import get_db
-from app.models import Store, User, UserStore
+from app.models import Store, Tenant, User, UserStore
 
 
 def get_current_user(
     db: Session = Depends(get_db),
     authorization: str | None = Header(None),
 ) -> User:
-    """当前登录用户依赖。
+    """当前登录用户依赖（按令牌查库，校验账号存在且启用）。
 
     :param db: 数据库会话
     :param authorization: Authorization 请求头
@@ -23,19 +35,29 @@ def get_current_user(
 
 
 def get_tenant_id(
-    authorization: str | None = Header(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    x_tenant_id: int | None = Header(None, alias="X-Tenant-Id"),
 ) -> int:
-    """从令牌解析所属租户 ID。
+    """解析当前请求所属租户：以数据库为准，令牌载荷中的 tid 不再参与。
 
-    :param authorization: Authorization 请求头
+    :param db: 数据库会话
+    :param user: 当前登录用户（由令牌解析并查库得到）
+    :param x_tenant_id: 仅平台超级管理员可用来显式切换目标业务租户
     :return: 租户 ID
+    :raises HTTPException: 租户不存在或已停用
     """
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(status_code=401, detail="请先登录")
-    payload = token_service.verify(authorization[7:].strip())
-    if payload is None:
-        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
-    return payload["tenant_id"]
+    # 平台超级管理员的跨租户通道：必须显式指定目标租户，且目标租户须启用
+    if user.role == "super" and x_tenant_id is not None:
+        target = db.get(Tenant, x_tenant_id)
+        if not target or not target.enabled:
+            raise HTTPException(status_code=403, detail="目标租户不存在或已停用")
+        return target.id
+
+    tenant = db.get(Tenant, user.tenant_id)
+    if not tenant or not tenant.enabled:
+        raise HTTPException(status_code=403, detail="租户不存在或已停用")
+    return tenant.id
 
 
 def get_super_admin(user: User = Depends(get_current_user)) -> User:
@@ -50,23 +72,23 @@ def get_super_admin(user: User = Depends(get_current_user)) -> User:
 
 
 def get_admin_user(user: User = Depends(get_current_user)) -> User:
-    """要求当前登录用户为租户管理员（admin）。
+    """要求当前登录用户为租户管理员及以上（admin / super）。
 
     :param user: 当前登录用户
-    :return: 租户管理员用户 ORM 对象
+    :return: 租户管理员及以上角色的用户 ORM 对象
     """
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="仅租户管理员可执行该操作")
+    if user.role not in ("admin", "super"):
+        raise HTTPException(status_code=403, detail="仅租户管理员及以上角色可执行该操作")
     return user
 
 
 def get_manager_user(user: User = Depends(get_current_user)) -> User:
-    """要求当前登录用户为店长或租户管理员（manager/admin）。
+    """要求当前登录用户为店长及以上（manager / admin / super）。
 
     :param user: 当前登录用户
     :return: 店长及以上角色的用户 ORM 对象
     """
-    if user.role not in ("admin", "manager"):
+    if user.role not in ("admin", "manager", "super"):
         raise HTTPException(status_code=403, detail="仅店长及以上角色可执行该操作")
     return user
 
@@ -75,22 +97,24 @@ def get_store_id(
     x_store_id: int | None = Header(None, alias="X-Store-Id"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    tenant_id: int = Depends(get_tenant_id),
 ) -> int:
-    """从请求头 X-Store-Id 获取当前门店 ID，并校验该门店属于当前租户且用户可访问。
+    """从请求头 X-Store-Id 获取门店 ID，并校验归属当前解析出的租户且用户可访问。
 
     :param x_store_id: 请求头传入的门店 ID
     :param db: 数据库会话
     :param user: 当前登录用户
+    :param tenant_id: 由 get_tenant_id 解析出的租户 ID（不再用 user.tenant_id 直比，
+        以兼容超级管理员通过 X-Tenant-Id 切换租户的场景）
     :return: 门店 ID
     """
     if x_store_id is None:
         raise HTTPException(status_code=400, detail="缺少 X-Store-Id 请求头")
-    # 校验门店归属租户
     store = db.get(Store, x_store_id)
-    if not store or store.tenant_id != user.tenant_id:
+    if not store or store.tenant_id != tenant_id:
         raise HTTPException(status_code=403, detail="无权访问该门店")
-    # 校验用户是否被授权访问该门店（管理员放行）
-    if user.role != "admin":
+    # 校验用户是否被授权访问该门店（租户管理员与平台超级管理员放行）
+    if user.role not in ("admin", "super"):
         allowed = db.scalar(
             select(UserStore.id).where(
                 UserStore.user_id == user.id, UserStore.store_id == x_store_id
