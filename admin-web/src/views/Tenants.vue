@@ -60,7 +60,7 @@
             <el-input v-model="form.adminUsername" placeholder="留空则不创建管理员" maxlength="50" />
           </el-form-item>
           <el-form-item label="初始密码">
-            <el-input v-model="form.adminPassword" placeholder="留空则默认 123456" maxlength="100" />
+            <el-input v-model="form.adminPassword" placeholder="填写管理员账号时必填，至少 8 位，勿用常见弱口令" maxlength="100" />
           </el-form-item>
           <el-form-item label="管理员姓名">
             <el-input v-model="form.adminName" placeholder="如：李经理" maxlength="50" />
