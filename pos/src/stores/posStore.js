@@ -23,7 +23,10 @@ import { getDeviceId } from '../services/offline/deviceId.js'
 
 // localStorage 键名
 const LS_PRODUCTS = 'pos_products' // 商品本地缓存（离线可用）
+const LS_CATEGORIES = 'pos_categories' // 分类本地缓存
 const LS_PROMOTIONS = 'pos_promotions' // 生效促销本地缓存
+const LS_MEMBERS = 'pos_members' // 会员档案本地缓存（仅身份识别 + 会员价，不含余额）
+const LS_LAST_SYNC = 'pos_last_sync_time' // 增量同步游标（重启后不丢）
 const LS_CART = 'pos_cart' // 购物车本地缓存
 const LS_HANG = 'pos_hang_orders' // 挂单本地缓存
 const LS_OFFLINE = 'pos_offline_orders' // 待上传订单队列
@@ -48,11 +51,12 @@ export const usePosStore = defineStore('pos', {
   state: () => ({
     // 商品与分类（来自后端同步）
     products: loadLS(LS_PRODUCTS, []),
-    categories: loadLS('pos_categories', []),
+    categories: loadLS(LS_CATEGORIES, []),
     // 同步状态：idle/syncing/synced/error
     syncState: 'idle',
     syncError: '',
-    lastSyncTime: null,
+    // Q07：增量游标持久化，POS 重启后不丢
+    lastSyncTime: loadLS(LS_LAST_SYNC, null),
     // 当前收银员（从本地缓存恢复，退出登录后清空）
     cashier: loadLS(LS_CASHIER, null),
     // 当前选中的门店（从本地缓存恢复，用于请求头 X-Store-Id）
@@ -65,6 +69,8 @@ export const usePosStore = defineStore('pos', {
     shiftId: loadLS(LS_SHIFT, null),
     // 当前识别的会员（null 表示散客）
     member: null,
+    // Q19：会员档案本地缓存（增量 upsert，仅档案字段，绝不含余额/资金路径）
+    members: loadLS(LS_MEMBERS, []),
     // 当前生效的促销规则
     promotions: loadLS(LS_PROMOTIONS, []),
     // 购物车
@@ -151,31 +157,66 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 同步拉取商品与分类（覆盖本地缓存）
+     * 同步拉取商品/分类/促销/会员并按 id 增量合并（Q07 / Q19）
+     * 绝不再用增量结果整体覆盖本地商品缓存；删除与停用商品按 tombstone 移除。
      */
     async syncProducts() {
       this.syncState = 'syncing'
       try {
         const data = await fetchSyncData(this.lastSyncTime)
-        if (data.products.length) {
-          this.products = data.products
-          localStorage.setItem(LS_PRODUCTS, JSON.stringify(this.products))
+
+        // 1. 商品增量按 id upsert 合并，二次同步不清空本地已有商品
+        const changed = Array.isArray(data.products) ? data.products : []
+        if (changed.length) {
+          const merged = new Map(this.products.map((p) => [String(p.id), p]))
+          for (const product of changed) merged.set(String(product.id), product)
+          this.products = [...merged.values()]
         }
-        if (data.categories.length) {
-          this.categories = data.categories
-          localStorage.setItem('pos_categories', JSON.stringify(this.categories))
+        // 2. 软删 / 停用 tombstone：从本地缓存移除，离线不再可售
+        const removed = new Set(
+          [...(data.deleted_ids || []), ...(data.disabled_ids || [])].map(String),
+        )
+        if (removed.size) {
+          this.products = this.products.filter((p) => !removed.has(String(p.id)))
         }
-        this.lastSyncTime = data.server_time
+        localStorage.setItem(LS_PRODUCTS, JSON.stringify(this.products))
+
+        // 3. 分类全量替换，且只保留启用分类（服务端已过滤，前端再兜一层）
+        this.categories = (data.categories || []).filter((c) => c.enabled !== false)
+        localStorage.setItem(LS_CATEGORIES, JSON.stringify(this.categories))
+
+        // 4. 促销以载荷中的门店级全量生效规则为准；旧版服务端无该字段时
+        //    才退回 fetchActivePromotions() 在线单独拉取，不再是唯一来源
+        if (Array.isArray(data.promotions)) {
+          this.promotions = data.promotions
+          localStorage.setItem(LS_PROMOTIONS, JSON.stringify(this.promotions))
+        } else {
+          try {
+            const promos = await fetchActivePromotions()
+            this.promotions = promos
+            localStorage.setItem(LS_PROMOTIONS, JSON.stringify(promos))
+          } catch {
+            // 在线拉取失败时保留本地缓存，下次同步再更新
+          }
+        }
+
+        // 5. 会员增量按 id upsert；载荷仅含档案字段，不含余额/积分/口令。
+        //    本组只用本地会员做身份识别 + 会员价，绝不触碰资金路径。
+        const members = Array.isArray(data.members) ? data.members : []
+        if (members.length) {
+          const mergedMembers = new Map(this.members.map((m) => [String(m.id), m]))
+          for (const member of members) mergedMembers.set(String(member.id), member)
+          this.members = [...mergedMembers.values()]
+          localStorage.setItem(LS_MEMBERS, JSON.stringify(this.members))
+        }
+
+        // 6. 游标持久化：server_time 为 naive UTC，重启后仍从该点增量拉取
+        if (data.server_time) {
+          this.lastSyncTime = data.server_time
+          localStorage.setItem(LS_LAST_SYNC, JSON.stringify(this.lastSyncTime))
+        }
         this.syncState = 'synced'
         this.syncError = ''
-        // 促销规则单独拉取，失败不影响商品同步
-        try {
-          const promos = await fetchActivePromotions()
-          this.promotions = promos
-          localStorage.setItem(LS_PROMOTIONS, JSON.stringify(promos))
-        } catch {
-          // 保留本地缓存的促销规则，下次同步再更新
-        }
       } catch (err) {
         this.syncState = 'error'
         this.syncError = err.message
@@ -263,6 +304,19 @@ export const usePosStore = defineStore('pos', {
      */
     clearMember() {
       this.member = null
+    },
+
+    /**
+     * 按手机号查找本地缓存会员（Q19：离线身份识别 + 会员价专用）
+     * 本地缓存由同步载荷增量 upsert，仅含档案字段，不含余额/积分/口令，
+     * 绝不用于离线余额扣减、离线储值支付或任何写 balance 的逻辑。
+     * @param {string} mobile 手机号
+     * @returns {object|null} 会员档案，未命中返回 null
+     */
+    findLocalMember(mobile) {
+      const keyword = String(mobile || '').trim()
+      if (!keyword) return null
+      return this.members.find((m) => String(m.mobile || '') === keyword) || null
     },
 
     /**

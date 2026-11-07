@@ -148,9 +148,11 @@ export function login(username, password) {
 }
 
 /**
- * 同步拉取商品与分类（增量同步）
+ * 同步拉取商品/分类/促销/会员（增量同步）
+ * Q07/Q19：after 为上次同步返回的 server_time（naive UTC），重启后从本地读取；
+ * 载荷含 deleted_ids / disabled_ids tombstone 与全量生效促销、增量会员。
  * @param {string|null} after 上次同步时间（增量）
- * @returns {Promise<object>} { products, categories }
+ * @returns {Promise<object>} { products, categories, deleted_ids, disabled_ids, promotions, members, server_time }
  */
 export function fetchSyncData(after = null) {
   const query = after ? `?after=${encodeURIComponent(after)}` : ''

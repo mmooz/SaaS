@@ -122,7 +122,7 @@
                   <span class="member-level">{{ levelText(store.member.level) }}</span>
                 </div>
                 <div class="member-sub num">
-                  {{ store.member.mobile }} · 积分 {{ store.member.points }} · 余额 ¥{{ store.member.balance.toFixed(2) }}
+                  {{ store.member.mobile }} · 积分 {{ store.member.points ?? 0 }} · 余额 ¥{{ Number(store.member.balance || 0).toFixed(2) }}
                 </div>
               </div>
               <el-button text type="danger" size="small" @click="store.clearMember">取消会员</el-button>
@@ -192,7 +192,7 @@
         </div>
         <div v-else-if="payMethod === '储值'" class="cash-input">
           <div v-if="store.member" class="member-pay-info num">
-            会员余额 ¥{{ store.member.balance.toFixed(2) }} · 本单应收 ¥{{ store.totalAmount.toFixed(2) }}
+            会员余额 ¥{{ Number(store.member.balance || 0).toFixed(2) }} · 本单应收 ¥{{ store.totalAmount.toFixed(2) }}
           </div>
           <div v-else class="pay-tip">请先识别会员后再使用储值支付</div>
         </div>
@@ -537,7 +537,17 @@ const identifyMember = async () => {
     memberDialog.value = false
     ElMessage.success(`已识别会员：${member.name || member.mobile}`)
   } catch (err) {
-    ElMessage.warning(err.message === '会员不存在' ? '未找到会员，可点击“快速建档”' : err.message)
+    // Q19：在线查询失败（断网 / 服务不可用）时回退本地会员缓存。
+    // 本地档案仅用于身份识别与会员价，不含余额；储值支付在支付入口被明确拒绝，
+    // 本组绝不实现离线余额扣减、离线储值支付或任何写 balance 的逻辑。
+    const local = store.findLocalMember(mobile)
+    if (local) {
+      store.setMember(local)
+      memberDialog.value = false
+      ElMessage.success(`离线识别会员：${local.name || local.mobile}（可用会员价，储值支付不可用）`)
+    } else {
+      ElMessage.warning(err.message === '会员不存在' ? '未找到会员，可点击“快速建档”' : err.message)
+    }
   } finally {
     memberLoading.value = false
   }
@@ -587,6 +597,11 @@ const openPay = (method) => {
       openMemberDialog()
       return
     }
+    // Q19：本地缓存会员不含余额，明确禁止离线储值支付（Q06 完成前禁用）
+    if (store.member.balance === undefined || store.member.balance === null) {
+      ElMessage.warning('离线识别的会员不支持储值支付，请联网重新识别或改用其它支付方式')
+      return
+    }
     if (store.member.balance < store.totalAmount) {
       ElMessage.warning('会员储值余额不足')
       return
@@ -618,6 +633,11 @@ const confirmPay = async () => {
       ElMessage.warning('请先识别会员')
       return
     }
+    // Q19：本地缓存会员不含余额，明确禁止离线储值支付（Q06 完成前禁用）
+    if (store.member.balance === undefined || store.member.balance === null) {
+      ElMessage.warning('离线识别的会员不支持储值支付，请联网重新识别或改用其它支付方式')
+      return
+    }
     if (store.member.balance < store.totalAmount) {
       ElMessage.warning('会员储值余额不足')
       return
@@ -643,7 +663,7 @@ const confirmPay = async () => {
     // 储值扣款与积分累计结果提示
     if (payMethod.value === '储值') {
       if (result.memberDeducted && store.member) {
-        ElMessage.success(`储值已扣款 · 当前余额 ¥${store.member.balance.toFixed(2)} · 积分 ${store.member.points}`)
+        ElMessage.success(`储值已扣款 · 当前余额 ¥${Number(store.member.balance || 0).toFixed(2)} · 积分 ${store.member.points ?? 0}`)
       } else {
         ElMessage.warning('储值扣款失败，请到后台核对会员余额')
       }
