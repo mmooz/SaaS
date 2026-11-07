@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class UserCreate(BaseModel):
     """新增后台用户请求体。"""
 
-    # 登录用户名（唯一）
+    # 登录用户名（全平台唯一，跨租户不可重名；登录按用户名全局查找）
     username: str = Field(..., min_length=2, max_length=50)
     # 姓名
     name: str = Field(..., min_length=1, max_length=50)

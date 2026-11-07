@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -13,6 +13,8 @@ class User(Base):
     """系统用户表：角色决定权限（super=平台超级管理员，admin=租户管理员，manager=店长，cashier=收银员）。"""
 
     __tablename__ = "users"
+    # Q11：登录按用户名全局查找，用户名须全平台唯一（对应迁移 b1a2c3d4e5f6）
+    __table_args__ = (Index("uq_users_username", "username", unique=True),)
 
     # 主键
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
@@ -20,8 +22,8 @@ class User(Base):
     tenant_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("tenants.id"), index=True, nullable=False
     )
-    # 登录用户名（租户内唯一）
-    username: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    # 登录用户名（全平台唯一，跨租户不可重名）
+    username: Mapped[str] = mapped_column(String(50), nullable=False)
     # 密码哈希
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     # 姓名

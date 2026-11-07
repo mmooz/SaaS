@@ -75,12 +75,13 @@ def create_user(
     tenant_id: int = Depends(get_tenant_id),
     _user: User = Depends(get_admin_user),
 ):
-    """新增后台用户（当前租户内用户名唯一，密码默认 123456）。"""
-    exists = db.scalar(
-        select(User).where(User.username == data.username.strip(), User.tenant_id == tenant_id)
-    )
+    """新增后台用户（Q11：登录按用户名全局查找，故用户名全平台唯一）。"""
+    # Q11：与 api/auth.py 的登录查询、TenantService.create 的初始管理员校验、
+    # DB 唯一索引 uq_users_username 保持同一口径；带 tenant_id 会让两个租户
+    # 建出同名账号，后创建者永远无法登录或误入他人账号
+    exists = db.scalar(select(User).where(User.username == data.username.strip()))
     if exists:
-        raise HTTPException(status_code=409, detail="用户名已存在")
+        raise HTTPException(status_code=409, detail="用户名已被占用，请更换")
     user = User(
         tenant_id=tenant_id,
         username=data.username.strip(),
