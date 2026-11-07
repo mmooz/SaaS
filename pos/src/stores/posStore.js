@@ -514,7 +514,20 @@ export const usePosStore = defineStore('pos', {
         }
         return { ok: true, offline: false, orderNo, order, memberDeducted }
       } catch (err) {
-        // 上传失败：写入离线队列，联网后自动补传
+        // R12：按错误类型分流。服务端 422/409/401 等业务错误说明订单根本不成立，
+        // 绝不能当成网络失败塞进离线队列（补传必然再次失败并进死信，业务数据永久丢失，
+        // 收银员还会被「离线收款成功」误导）。此类错误必须原样抛回调用方。
+        if (!isNetworkError(err)) {
+          // 回滚先前的本机落库，避免离线退款/交班列表残留一条无效单；
+          // 回滚失败不遮蔽原始业务错误，仅记录到控制台。
+          try {
+            await offlineStore.removeLocalOrder(orderNo)
+          } catch (rollbackErr) {
+            console.error('[settle] 回滚本机订单失败', rollbackErr)
+          }
+          throw err
+        }
+        // 上传失败（网络不可用）：写入离线队列，联网后自动补传
         await offlineStore.queueItem('order', orderNo, { ...order, offline: true }, now)
         await offlineStore.saveLocalOrder({ ...order, offline: true })
         this.offlineOrders.push({ ...order, offline: true })

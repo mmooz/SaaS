@@ -654,8 +654,16 @@ const confirmPay = async () => {
   const weightedCount = store.cart.filter((i) => i.weighted).length
   // 结算会清空购物车，先记录应收金额用于提示文案
   const total = store.totalAmount
+  // R12：结算成功（含离线兜底）之后再关闭支付弹窗；settle() 抛出业务错误时
+  // 保留弹窗与购物车，收银员可修正后重试，避免未捕获异常与「离线收款成功」误导。
+  let result
+  try {
+    result = await store.settle({ payMethod: payMethod.value })
+  } catch (err) {
+    ElMessage.error('结算失败：' + (err.message || '未知错误'))
+    return
+  }
   payDialog.value = false
-  const result = await store.settle({ payMethod: payMethod.value })
   if (result.ok) {
     ElMessage.success(
       `收款成功 ¥${total.toFixed(2)} · 已上传订单${weightedCount ? ` + ${weightedCount}张价格标签` : ''}`,

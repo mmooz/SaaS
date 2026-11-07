@@ -165,6 +165,24 @@ export class OfflineStore {
   }
 
   /**
+   * 按订单号删除本机订单（R12：在线结算被服务端业务校验拒绝时回滚本地落库）
+   *
+   * Tauri 分支执行 DELETE，浏览器兜底分支删除内存记录并持久化，两分支行为一致。
+   * 订单号不存在时静默成功，便于调用方无条件回滚。
+   * @param {string} orderNo 订单号
+   * @returns {Promise<void>}
+   */
+  async removeLocalOrder(orderNo) {
+    await this.init()
+    if (!this.tauri) {
+      delete this.memory.orders[orderNo]
+      this.saveMemory()
+      return
+    }
+    await this.db.execute('DELETE FROM local_orders WHERE order_no = ?', [orderNo])
+  }
+
+  /**
    * 按订单号读取本机订单
    * @param {string} orderNo 订单号
    * @returns {Promise<object|null>} 订单数据
