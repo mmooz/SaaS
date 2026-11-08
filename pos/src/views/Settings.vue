@@ -1,13 +1,7 @@
 <template>
-  <div class="page">
-    <!-- 顶部深色栏 -->
-    <header class="page-header">
-      <div class="header-title">系统设置</div>
-    </header>
-
-    <div class="page-body settings-body">
-      <!-- 左侧竖排菜单 -->
-      <aside class="side-menu">
+  <div class="settings-page">
+    <!-- 左侧竖排菜单 -->
+    <aside class="side-menu">
         <button
           v-for="m in menus"
           :key="m.key"
@@ -244,14 +238,13 @@
           </el-button>
         </div>
       </section>
-    </div>
   </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Check, Odometer, Printer, Refresh, Shop } from '@element-plus/icons-vue'
+import { Check, Odometer, Printer, Refresh, Shop } from '@element-plus/icons-vue'
 import { PrintService } from '../services/print/PrintService'
 import { TauriPrintService } from '../services/print/TauriPrintService'
 import { TauriScaleService } from '../services/scale/TauriScaleService'
@@ -548,51 +541,8 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.page {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--neutral-100);
-}
-
-/* ----- 顶部深色栏（与 PosMain 呼应） ----- */
-.page-header {
-  height: 64px;
-  background: var(--neutral-900);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  flex-shrink: 0;
-}
-.header-title {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 1px;
-}
-.page-header :deep(.el-button) {
-  height: 44px;
-  border-radius: var(--radius-md);
-  background: oklch(30% 0.02 152);
-  border-color: oklch(45% 0.02 152);
-  color: #fff;
-  font-size: 16px;
-}
-.page-header :deep(.el-button:hover) {
-  background: oklch(40% 0.03 152);
-  color: #fff;
-}
-
-/* ----- 页面主体：左菜单 + 右内容 ----- */
-.page-body {
-  flex: 1;
-  width: 100%;
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: var(--space-5) var(--space-4);
-}
-.settings-body {
+/* ----- 根容器：与工作台管理页一致（铺在 ManageLayout 内容区，白卡横排） ----- */
+.settings-page {
   display: flex;
   gap: var(--space-4);
   align-items: flex-start;
@@ -614,7 +564,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 8px;
   background: #fff;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   border: 1px solid var(--neutral-200);
   box-shadow: var(--shadow-sm);
   padding: var(--space-3);
@@ -649,7 +599,7 @@ onMounted(() => {
 .content-card {
   flex: 1;
   background: #fff;
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   border: 1px solid var(--neutral-200);
   box-shadow: var(--shadow-sm);
   padding: var(--space-5);
@@ -711,7 +661,7 @@ onMounted(() => {
 /* ----- 打印机分组 ----- */
 .printer-block {
   border: 1px solid var(--neutral-200);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   padding: var(--space-4);
   margin-bottom: var(--space-4);
 }
