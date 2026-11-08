@@ -21,6 +21,8 @@ class OrderOut(BaseModel):
     store_id: int
     # 收银员用户 ID
     cashier_id: SnowflakeId | None
+    # 收银员姓名（由服务端按 cashier_id 补齐，客户端不可伪造）
+    cashier_name: str | None = None
     # 交接班会话 ID
     shift_id: SnowflakeId | None
     # 订单状态

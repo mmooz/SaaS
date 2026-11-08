@@ -1,6 +1,12 @@
-"""订单管理 API：订单上传（幂等）、查询与退款退货。"""
+"""订单管理 API：订单上传（幂等）、查询与退款退货。
+
+订单读取权限（本批新增）：普通收银员只能查询本人产生的订单，
+店长 / 租户管理员 / 平台超级管理员可查询当前门店全部订单。过滤在服务端
+强制施加于列表、单号详情与退款记录三个读取入口，前端隐藏按钮不构成边界。
+"""
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
-from app.dependencies import get_manager_user, get_store_id, get_tenant_id
+from app.dependencies import (
+    get_current_user,
+    get_manager_user,
+    get_store_id,
+    get_tenant_id,
+)
 from app.models import (
     Member,
     Order,
@@ -37,6 +48,56 @@ router = APIRouter(prefix="/api/orders", tags=["订单管理"])
 # （离线补传）」的既有口径，不新增请求字段、不改 OrderCreate 契约。
 OFFLINE_UPLOAD_TOLERANCE_MINUTES = 1
 
+# 可查看「当前门店全部订单」的角色；其余角色（cashier）仅限本人订单。
+# 与 dependencies.get_manager_user 的层级保持一致：super > admin > manager > cashier。
+ORDER_ALL_ROLES = ("admin", "manager", "super")
+
+
+@dataclass(frozen=True)
+class OrderScope:
+    """订单读取上下文：租户、门店与可选的收银员过滤条件。
+
+    :param tenant_id: 由令牌用户解析出的租户（super 可经 X-Tenant-Id 切换）
+    :param store_id: 由 X-Store-Id 解析并校验过归属 / 访问权限的门店
+    :param cashier_id: 非 None 时只能读该收银员产生的订单
+    """
+
+    tenant_id: int
+    store_id: int
+    cashier_id: int | None
+
+
+def get_order_scope(
+    user: User = Depends(get_current_user),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
+) -> OrderScope:
+    """解析订单读取范围。收银员限定本人，店长及以上放开到全店。
+
+    ``get_store_id`` 已完成租户归属与用户门店授权校验；此处再补 tenant_id
+    防御过滤，避免历史脏数据（store_id 正确但 tenant_id 不一致）被读出。
+    """
+    cashier_only = None if user.role in ORDER_ALL_ROLES else user.id
+    return OrderScope(tenant_id=tenant_id, store_id=store_id, cashier_id=cashier_only)
+
+
+def _scoped_order_stmt(scope: OrderScope, order_no: str | None = None):
+    """构造带租户 / 门店 / 角色过滤的订单查询。
+
+    :param scope: 订单读取上下文
+    :param order_no: 可选的单号精确匹配条件
+    :return: SQLAlchemy Select 语句
+    """
+    stmt = select(Order).where(
+        Order.tenant_id == scope.tenant_id,
+        Order.store_id == scope.store_id,
+    )
+    if scope.cashier_id is not None:
+        stmt = stmt.where(Order.cashier_id == scope.cashier_id)
+    if order_no is not None:
+        stmt = stmt.where(Order.order_no == order_no)
+    return stmt
+
 
 def _member_mobiles(db: Session, orders: list[Order]) -> dict[int, str]:
     """批量查询订单关联会员的手机号。
@@ -50,6 +111,20 @@ def _member_mobiles(db: Session, orders: list[Order]) -> dict[int, str]:
         return {}
     rows = db.scalars(select(Member).where(Member.id.in_(ids))).all()
     return {m.id: m.mobile for m in rows}
+
+
+def _cashier_names(db: Session, orders: list[Order]) -> dict[int, str]:
+    """批量查询订单关联收银员姓名（管理员查看全店订单时用于区分归属）。
+
+    :param db: 数据库会话
+    :param orders: 订单列表
+    :return: 用户 ID -> 姓名
+    """
+    ids = {o.cashier_id for o in orders if o.cashier_id}
+    if not ids:
+        return {}
+    rows = db.scalars(select(User).where(User.id.in_(ids))).all()
+    return {u.id: u.name for u in rows}
 
 
 def _refund_totals(db: Session, orders: list[Order]) -> dict[int, float]:
@@ -103,12 +178,14 @@ def _serialize(
     :return: 订单响应模型列表
     """
     mobiles = _member_mobiles(db, orders) if with_mobile else {}
+    cashiers = _cashier_names(db, orders)
     totals = _refund_totals(db, orders)
     refunded_map = _refunded_item_map(db, orders)
     result: list[OrderOut] = []
     for order in orders:
         out = OrderOut.model_validate(order)
         out.member_mobile = mobiles.get(order.member_id) if order.member_id else None
+        out.cashier_name = cashiers.get(order.cashier_id) if order.cashier_id else None
         out.refunded_amount = totals.get(order.id, 0)
         # 标记已退货明细，收银端据此禁用重复退货（输出 ID 为字符串，需统一类型比较）
         refunded_ids = {str(item_id) for item_id in refunded_map.get(order.id, set())}
@@ -246,8 +323,13 @@ def create_order(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
+    user: User = Depends(get_current_user),
 ):
-    """收银端上传订单：按 order_no 幂等去重，重复上传返回已存在的订单。"""
+    """收银端上传订单：按 order_no 幂等去重，重复上传返回已存在的订单。
+
+    权限：收银员上传的订单归属强制取令牌用户，杜绝把单挂到他人名下或
+    留空绕过「只能查本人订单」的过滤；店长及以上保持原契约不变。
+    """
     # Q03 幂等检查：order_no 有全局唯一约束，必须先按单号全局查一次。
     # 命中但租户/门店上下文不同 -> 409 冲突（既不能把他人订单当幂等结果返回，
     # 也不能走到新建分支撞唯一索引报 500）；上下文相同 -> 幂等返回原单。
@@ -258,17 +340,28 @@ def create_order(
                 status_code=409,
                 detail="订单号已被其它门店或租户使用，请更换单号后重试",
             )
+        # 收银员不能借「幂等补传」通道读到他人的订单；命中他人单号直接拒绝，
+        # 与查询接口一样不泄露更多内容。
+        if (
+            user.role not in ORDER_ALL_ROLES
+            and existing.cashier_id is not None
+            and existing.cashier_id != user.id
+        ):
+            raise HTTPException(status_code=403, detail="无权访问该订单")
         return _serialize(db, [existing])[0]
 
     # Q22：服务端校验载荷，金额、支付方式与关联 ID 不再照单全收
     _validate_order_payload(db, data, tenant_id, store_id)
+
+    # 收银员身份以令牌为准：客户端声明的 cashier_id 一律忽略，避免伪造归属
+    cashier_id = user.id if user.role not in ORDER_ALL_ROLES else data.cashier_id
 
     # 创建订单主记录（离线补传时沿用收银端生成的 ID 与下单时间；租户/门店以当前上下文为准）
     order_kwargs = {
         "order_no": data.order_no,
         "tenant_id": tenant_id,
         "store_id": store_id,
-        "cashier_id": data.cashier_id,
+        "cashier_id": cashier_id,
         "shift_id": data.shift_id,
         "status": data.status,
         "total_amount": data.total_amount,
@@ -319,10 +412,14 @@ def list_orders(
     page: int = 1,
     page_size: int = 20,
     db: Session = Depends(get_db),
-    store_id: int = Depends(get_store_id),
+    scope: OrderScope = Depends(get_order_scope),
 ):
-    """分页查询订单（支持按订单号/会员手机号、时间范围与状态筛选）。"""
-    stmt = select(Order).where(Order.store_id == store_id)
+    """分页查询订单（支持按订单号/会员手机号、时间范围与状态筛选）。
+
+    权限：cashier 仅返回本人产生的订单；manager/admin/super 返回当前门店全部订单。
+    返回的 ``scope`` 字段供客户端展示可见范围提示（own / all）。
+    """
+    stmt = _scoped_order_stmt(scope)
     if keyword:
         # 关键字同时匹配订单号与会员手机号（退款页搜索用）
         like = f"%{keyword.strip()}%"
@@ -346,6 +443,7 @@ def list_orders(
         "total": total,
         "page": page,
         "page_size": page_size,
+        "scope": "all" if scope.cashier_id is None else "own",
         "items": _serialize(db, orders),
     }
 
@@ -354,12 +452,14 @@ def list_orders(
 def get_order(
     order_no: str,
     db: Session = Depends(get_db),
-    store_id: int = Depends(get_store_id),
+    scope: OrderScope = Depends(get_order_scope),
 ):
-    """按订单号查询订单详情（含退款标记）。"""
-    order = db.scalar(
-        select(Order).where(Order.order_no == order_no, Order.store_id == store_id)
-    )
+    """按订单号查询订单详情（含退款标记）。
+
+    权限与列表一致：收银员即便知道他人单号也不能读取，越权一律按 404 处理，
+    不泄露订单是否存在。
+    """
+    order = db.scalar(_scoped_order_stmt(scope, order_no))
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
     return _serialize(db, [order])[0]
@@ -424,12 +524,10 @@ def refund_order(
 def list_order_refunds(
     order_no: str,
     db: Session = Depends(get_db),
-    store_id: int = Depends(get_store_id),
+    scope: OrderScope = Depends(get_order_scope),
 ):
-    """查询订单的全部退款记录（时间倒序）。"""
-    order = db.scalar(
-        select(Order).where(Order.order_no == order_no, Order.store_id == store_id)
-    )
+    """查询订单的全部退款记录（时间倒序，权限与订单详情一致）。"""
+    order = db.scalar(_scoped_order_stmt(scope, order_no))
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
     return RefundService.list_refunds(db, order.id)
