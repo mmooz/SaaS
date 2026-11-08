@@ -88,6 +88,38 @@ function loadLS(key, fallback) {
   }
 }
 
+/**
+ * 挂单缓存规范化：兼容旧版只存 { count, amount, time, snapshot } 的条目，
+ * 补齐单号 / 备注 / 收银员 / 会员等字段，避免旧数据升级后抽屉渲染报错。
+ * @param {*} raw localStorage 解析结果
+ * @returns {Array<object>} 规范化后的挂单列表
+ */
+function normalizeHangOrders(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw.map((h, i) => {
+    const snapshot = Array.isArray(h && h.snapshot) ? h.snapshot : []
+    return {
+      id: (h && h.id) || `legacy-${i}-${(h && h.time) || ''}`,
+      no: (h && h.no) || '',
+      createdAt: (h && h.createdAt) || '',
+      time: (h && h.time) || '',
+      count: Number((h && h.count) || snapshot.length) || 0,
+      amount: Number((h && h.amount) || 0) || 0,
+      remark: (h && h.remark) || '',
+      cashierId: (h && h.cashierId) ?? null,
+      cashierName: (h && h.cashierName) || '',
+      storeId: (h && h.storeId) ?? null,
+      member: (h && h.member) || null,
+      snapshot,
+    }
+  })
+}
+
+/** 持久化挂单列表到本机（收银台重启 / 换班后仍可取单） */
+function saveHangOrders(list) {
+  localStorage.setItem(LS_HANG, JSON.stringify(list))
+}
+
 export const usePosStore = defineStore('pos', {
   state: () => ({
     // 商品与分类（来自后端同步）
@@ -116,8 +148,8 @@ export const usePosStore = defineStore('pos', {
     promotions: loadLS(LS_PROMOTIONS, []),
     // 购物车
     cart: loadLS(LS_CART, []),
-    // 挂单列表
-    hangOrders: loadLS(LS_HANG, []),
+    // 挂单列表（本机收银台共享，含单号/备注/收银员/会员快照）
+    hangOrders: normalizeHangOrders(loadLS(LS_HANG, [])),
     // 待上传订单队列（启动后从本地离线数据库加载）
     offlineOrders: [],
     // Q25：死信队列镜像（被服务端明确拒绝的队列项，供监控/人工重放）
@@ -456,28 +488,70 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 挂单/取单/删单
+     * 挂起当前购物车：生成唯一挂单号并连同会员 / 收银员 / 门店快照一并落本机。
+     * 挂单不上传服务端，仅本台收银设备可见（换班不清空，由收银员按单号取回）。
+     * @param {string} remark 挂单备注（如顾客姓氏、桌号），最长 50 字
+     * @returns {object|null} 新建的挂单；购物车为空时返回 null
      */
-    hangOrder() {
-      if (!this.cart.length) return
-      this.hangOrders.unshift({
+    hangOrder(remark = '') {
+      if (!this.cart.length) return null
+      const now = new Date()
+      const pad = (n, len = 2) => String(n).padStart(len, '0')
+      const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+      const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`
+      const seqKey = 'pos_hang_seq'
+      const seq = (parseInt(localStorage.getItem(seqKey) || '0', 10) + 1) % 1000
+      localStorage.setItem(seqKey, String(seq))
+      const hang = {
+        id: `${now.getTime()}-${seq}-${Math.random().toString(36).slice(2, 7)}`,
+        no: `H${getDeviceId()}-${date}${time}-${pad(seq, 3)}`,
+        createdAt: now.toISOString(),
+        time: now.toLocaleString('zh-CN', { hour12: false }),
         count: this.cart.length,
         amount: this.totalAmount,
-        time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+        remark: String(remark || '').trim().slice(0, 50),
+        cashierId: this.cashier ? this.cashier.id : null,
+        cashierName: this.cashier ? this.cashier.name : '',
+        storeId: getCurrentStore() || null,
+        // 会员档案只做身份 / 会员价恢复，余额字段不参与任何离线资金动作
+        member: this.member ? JSON.parse(JSON.stringify(this.member)) : null,
         snapshot: JSON.parse(JSON.stringify(this.cart)),
-      })
-      localStorage.setItem(LS_HANG, JSON.stringify(this.hangOrders))
+      }
+      this.hangOrders.unshift(hang)
+      saveHangOrders(this.hangOrders)
       this.clearCart()
+      this.clearMember()
+      return hang
     },
-    resumeHang(index) {
-      this.cart = this.hangOrders[index].snapshot
-      this.hangOrders.splice(index, 1)
-      localStorage.setItem(LS_HANG, JSON.stringify(this.hangOrders))
+
+    /**
+     * 取回挂单：按挂单 id 定位（不再依赖列表下标，避免并发操作错位）。
+     * 当前购物车非空时由调用方决定「直接覆盖」还是「先挂起当前单」，
+     * 本方法通过 alsoHangCurrent 执行后者，绝不静默丢弃当前商品。
+     * @param {string} id 挂单 id
+     * @param {object} options { alsoHangCurrent:boolean }
+     * @returns {boolean} 是否成功取回
+     */
+    resumeHang(id, { alsoHangCurrent = false } = {}) {
+      const hang = this.hangOrders.find((h) => h.id === id)
+      if (!hang) return false
+      if (alsoHangCurrent && this.cart.length) this.hangOrder('取单前自动挂起')
+      this.cart = JSON.parse(JSON.stringify(hang.snapshot || []))
+      this.member = hang.member ? JSON.parse(JSON.stringify(hang.member)) : null
+      // hangOrder 可能 unshift 新条目，按 id 过滤而不是按原下标删除
+      this.hangOrders = this.hangOrders.filter((h) => h.id !== id)
+      saveHangOrders(this.hangOrders)
       this.persistCart()
+      return true
     },
-    removeHang(index) {
-      this.hangOrders.splice(index, 1)
-      localStorage.setItem(LS_HANG, JSON.stringify(this.hangOrders))
+
+    /**
+     * 删除挂单（不可恢复，由界面层先做二次确认）
+     * @param {string} id 挂单 id
+     */
+    removeHang(id) {
+      this.hangOrders = this.hangOrders.filter((h) => h.id !== id)
+      saveHangOrders(this.hangOrders)
     },
 
     /**

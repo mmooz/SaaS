@@ -12,7 +12,9 @@
       </div>
       <div class="header-clock num">{{ now }}</div>
       <div class="header-actions">
-        <el-button size="large" @click="hangDrawer = true"><el-icon><Folder /></el-icon>&nbsp;挂单</el-button>
+        <el-button size="large" @click="hangDrawer = true">
+          <el-icon><Folder /></el-icon>&nbsp;挂单<span v-if="store.hangOrders.length" class="btn-badge">{{ store.hangOrders.length }}</span>
+        </el-button>
         <el-button size="large" @click="$router.push('/reprint')"><el-icon><Printer /></el-icon>&nbsp;补打</el-button>
         <!-- Q17：仅店长及以上可见退款入口，收银员无入口 -->
         <el-button v-if="isManager" size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
@@ -172,21 +174,63 @@
       </aside>
     </div>
 
-    <!-- 挂单抽屉 -->
-    <el-drawer v-model="hangDrawer" title="挂单管理" size="380px">
-      <div v-if="store.hangOrders.length === 0" class="hang-empty">暂无挂单</div>
-      <div v-for="(h, i) in store.hangOrders" :key="i" class="hang-item">
-        <div class="hang-info">
-          <div class="hang-time num">{{ h.time }}</div>
-          <div class="hang-items">{{ h.count }} 项</div>
-          <div class="hang-amount num">¥{{ h.amount.toFixed(2) }}</div>
+    <!-- 挂单抽屉：挂起当前单 + 挂单列表 -->
+    <el-drawer v-model="hangDrawer" title="挂单管理" size="420px">
+      <section class="hang-create">
+        <div class="hang-create-tip">把当前购物车暂存到本机，稍后凭单号取回继续收银（快捷键 F10）。挂单不会上传服务端。</div>
+        <el-input
+          v-model="hangRemark"
+          size="large"
+          maxlength="50"
+          show-word-limit
+          clearable
+          placeholder="备注：顾客姓氏 / 桌号（选填）"
+          @keyup.enter="createHang"
+        />
+        <el-button
+          type="primary"
+          size="large"
+          class="hang-create-btn"
+          :disabled="store.cart.length === 0"
+          @click="createHang"
+        >
+          挂起当前单（{{ store.cart.length }} 项 · ¥{{ store.totalAmount.toFixed(2) }}）
+        </el-button>
+      </section>
+
+      <div class="hang-list-head">挂单列表（{{ store.hangOrders.length }}）</div>
+      <div v-if="store.hangOrders.length === 0" class="hang-empty">暂无挂单，先在收银台加商品再点「挂起当前单」</div>
+      <div v-for="h in store.hangOrders" :key="h.id" class="hang-item">
+        <div class="hang-top">
+          <span class="hang-no num">{{ h.no || '旧版挂单' }}</span>
+          <span class="hang-time num">{{ h.time }}</span>
         </div>
+        <div class="hang-meta">
+          {{ h.count }} 项 · <span class="num">¥{{ Number(h.amount).toFixed(2) }}</span>
+          <span v-if="h.cashierName"> · {{ h.cashierName }}</span>
+          <span v-if="h.member"> · 会员 {{ h.member.name || h.member.mobile }}</span>
+        </div>
+        <div v-if="h.remark" class="hang-remark">备注：{{ h.remark }}</div>
+        <div class="hang-goods">{{ hangSummary(h) }}</div>
         <div class="hang-ops">
-          <el-button type="primary" @click="store.resumeHang(i)">取单</el-button>
-          <el-button text type="danger" @click="store.removeHang(i)">删除</el-button>
+          <el-button type="primary" @click="requestResume(h)">取单</el-button>
+          <el-button text type="danger" @click="confirmRemoveHang(h)">删除</el-button>
         </div>
       </div>
     </el-drawer>
+
+    <!-- 取单二次确认：购物车非空时不允许静默覆盖 -->
+    <el-dialog v-model="resumeConfirm.visible" title="取单确认" width="440px">
+      <div class="resume-text">
+        当前购物车还有 {{ resumeConfirm.cartCount }} 项未结算商品，直接取单会覆盖。请选择处理方式：
+      </div>
+      <div class="resume-tip">挂单 {{ resumeConfirm.no || '（旧版挂单）' }} · 建议先挂起当前单，避免丢失商品。</div>
+      <template #footer>
+        <el-button @click="resumeConfirm.visible = false">取消</el-button>
+        <el-button @click="doResume('replace')">直接覆盖取单</el-button>
+        <el-button type="primary" @click="doResume('hangFirst')">先挂起再取单</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 支付弹窗 -->
     <el-dialog v-model="payDialog" :title="`${payMethod} 收款`" width="420px" :show-close="false">
@@ -238,9 +282,9 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   Search, Printer, RefreshLeft, Switch, Setting, Folder, SwitchButton,
 } from '@element-plus/icons-vue'
@@ -749,6 +793,91 @@ const handleOnline = async () => {
 
 /* ---------- 挂单抽屉 ---------- */
 const hangDrawer = ref(false)
+const hangRemark = ref('')
+// 取单二次确认弹窗状态（购物车非空时必须由收银员显式选择处理方式）
+const resumeConfirm = reactive({ visible: false, id: '', no: '', cartCount: 0 })
+
+/**
+ * 挂起当前购物车，成功后清空备注并提示单号
+ */
+const createHang = () => {
+  const hang = store.hangOrder(hangRemark.value)
+  if (!hang) {
+    ElMessage.warning('购物车为空，无法挂单')
+    return
+  }
+  hangRemark.value = ''
+  ElMessage.success(`已挂单 ${hang.no}，可在挂单列表取回`)
+}
+
+/**
+ * 挂单商品摘要（最多显示 4 个商品名）
+ * @param {object} h 挂单
+ * @returns {string} 摘要文案
+ */
+const hangSummary = (h) => {
+  const names = (h.snapshot || []).map((i) => i.name)
+  const shown = names.slice(0, 4).join('、')
+  return names.length > 4 ? `${shown}…` : shown
+}
+
+/**
+ * 点击取单：购物车非空时先弹三选一确认，绝不静默覆盖当前商品
+ * @param {object} h 挂单
+ */
+const requestResume = (h) => {
+  if (store.cart.length) {
+    Object.assign(resumeConfirm, {
+      visible: true,
+      id: h.id,
+      no: h.no,
+      cartCount: store.cart.length,
+    })
+    return
+  }
+  doResume('replace', h.id, h.no)
+}
+
+/**
+ * 执行取单
+ * @param {'replace'|'hangFirst'} mode 直接覆盖 / 先挂起当前单
+ * @param {string} directId 无弹窗时的挂单 id
+ * @param {string} directNo 无弹窗时的挂单号
+ */
+const doResume = (mode, directId = '', directNo = '') => {
+  const id = directId || resumeConfirm.id
+  const no = directNo || resumeConfirm.no
+  const ok = store.resumeHang(id, { alsoHangCurrent: mode === 'hangFirst' })
+  resumeConfirm.visible = false
+  if (!ok) {
+    ElMessage.warning('挂单已不存在，请刷新列表')
+    return
+  }
+  hangDrawer.value = false
+  ElMessage.success(
+    mode === 'hangFirst'
+      ? '已先挂起当前单，并取回所选挂单'
+      : `已取回 ${no || '挂单'}`,
+  )
+}
+
+/**
+ * 删除挂单（二次确认，删除后不可恢复）
+ * @param {object} h 挂单
+ */
+const confirmRemoveHang = async (h) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除挂单 ${h.no || '（旧版挂单）'}？删除后不可恢复。`,
+      '删除挂单',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  store.removeHang(h.id)
+  ElMessage.success('挂单已删除')
+}
 
 /* ---------- 同步状态与时钟 ---------- */
 const syncClass = computed(() => {
@@ -767,11 +896,16 @@ const updateClock = () => {
   now.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
 }
 
-// 全局快捷键：F9 结算、Esc 清空
+// 全局快捷键：F9 结算、F10 挂单、Esc 清空
+// 弹窗 / 抽屉打开时不响应快捷键，避免在输入框里打字被误触发
 const onKeydown = (e) => {
+  if (resumeConfirm.visible || hangDrawer.value) return
   if (e.key === 'F9') {
     e.preventDefault()
     settle()
+  } else if (e.key === 'F10') {
+    e.preventDefault()
+    createHang()
   } else if (e.key === 'Escape') {
     store.clearCart()
   }
@@ -1350,32 +1484,107 @@ onBeforeUnmount(() => {
   color: var(--warning);
 }
 
+/* ----- 顶部按钮角标 ----- */
+.btn-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 /* ----- 挂单抽屉 ----- */
+.hang-create {
+  padding: 14px;
+  border: 1px solid var(--neutral-200);
+  border-radius: 12px;
+  background: var(--neutral-50);
+}
+.hang-create-tip {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--neutral-600);
+  margin-bottom: 12px;
+}
+.hang-create-btn {
+  width: 100%;
+  margin-top: 12px;
+  height: 48px;
+  font-size: 16px;
+}
+.hang-list-head {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+  color: var(--neutral-700);
+}
 .hang-empty {
   color: var(--neutral-400);
   text-align: center;
-  padding: 40px 0;
+  padding: 36px 12px;
+  line-height: 1.7;
 }
 .hang-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   padding: 14px;
   border: 1px solid var(--neutral-200);
   border-radius: 10px;
   margin-bottom: 10px;
+  background: #fff;
+}
+.hang-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.hang-no {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--neutral-800);
+  word-break: break-all;
 }
 .hang-time {
-  font-size: 13px;
+  font-size: 12px;
   color: var(--neutral-400);
+  white-space: nowrap;
 }
-.hang-items {
+.hang-meta {
   font-size: 15px;
-  font-weight: 500;
-  margin: 4px 0;
+  font-weight: 600;
+  margin: 8px 0 4px;
 }
-.hang-amount {
-  font-size: 18px;
-  font-weight: 700;
+.hang-remark,
+.hang-goods {
+  font-size: 13px;
+  color: var(--neutral-500);
+  line-height: 1.6;
+  word-break: break-all;
+}
+.hang-remark {
+  color: var(--warning);
+}
+.hang-ops {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.resume-text {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--neutral-800);
+}
+.resume-tip {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--neutral-500);
+  line-height: 1.6;
 }
 </style>
