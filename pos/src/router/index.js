@@ -21,9 +21,21 @@ const routes = [
   {
     path: '/manage',
     component: ManageLayout,
-    meta: { requireManager: true },
     children: [
-      { path: '', redirect: '/manage/dashboard' },
+      {
+        path: '',
+        // 默认落地页按角色分流：店长进仪表盘，普通店员直接进订单查询（符合"店员可查本人订单"）
+        redirect: (to) => {
+          const c = (() => {
+            try {
+              return JSON.parse(localStorage.getItem('pos_cashier') || 'null')
+            } catch {
+              return null
+            }
+          })()
+          return MANAGER_ROLES.includes(c?.role) ? '/manage/dashboard' : '/orders'
+        },
+      },
       { path: 'dashboard', name: 'ManageDashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '首页仪表盘', requireManager: true } },
       { path: 'products', name: 'ManageProducts', component: () => import('../views/Products.vue'), meta: { title: '商品管理', requireManager: true } },
       { path: 'categories', name: 'ManageCategories', component: () => import('../views/Categories.vue'), meta: { title: '分类管理', requireManager: true } },

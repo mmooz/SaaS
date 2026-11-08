@@ -15,10 +15,10 @@
         router
         class="side-menu"
       >
-        <el-menu-item index="/manage">
+        <el-menu-item v-if="isManager" index="/manage">
           <el-icon><Odometer /></el-icon><span>首页仪表盘</span>
         </el-menu-item>
-        <el-sub-menu index="g-data">
+        <el-sub-menu v-if="isManager" index="g-data">
           <template #title><el-icon><Box /></el-icon><span>基础数据</span></template>
           <el-menu-item index="/manage/products"><el-icon><Box /></el-icon>商品管理</el-menu-item>
           <el-menu-item index="/manage/categories"><el-icon><FolderOpened /></el-icon>分类管理</el-menu-item>
@@ -26,7 +26,7 @@
           <el-menu-item index="/manage/promotions"><el-icon><PriceTag /></el-icon>促销管理</el-menu-item>
           <el-menu-item index="/manage/inventory"><el-icon><SetUp /></el-icon>库存管理</el-menu-item>
         </el-sub-menu>
-        <el-menu-item index="/manage/reports">
+        <el-menu-item v-if="isManager" index="/manage/reports">
           <el-icon><DataAnalysis /></el-icon><span>报表中心</span>
         </el-menu-item>
         <el-sub-menu index="g-biz">
@@ -95,6 +95,9 @@ function loadCashier() {
   }
 }
 const cashier = loadCashier() || {}
+
+// 店长及以上角色：控制敏感数据页菜单显隐，普通店员仅见订单查询/交接班/设置等
+const isManager = computed(() => ['admin', 'manager', 'super'].includes(cashier.role))
 
 // 当前激活的菜单项（按路由路径匹配）
 const activeMenu = computed(() => route.path)

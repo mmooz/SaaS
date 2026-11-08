@@ -12,21 +12,16 @@
       </div>
       <div class="header-clock num">{{ now }}</div>
       <div class="header-actions">
-        <!-- 交易 / 查询：挂单、订单、补打、退款（店长及以上） -->
-        <el-button size="large" @click="hangDrawer = true">
-          <el-icon><Folder /></el-icon>&nbsp;挂单<span v-if="store.hangOrders.length" class="btn-badge">{{ store.hangOrders.length }}</span>
-        </el-button>
-        <el-button size="large" @click="$router.push('/orders')"><el-icon><List /></el-icon>&nbsp;订单</el-button>
+        <!-- 交易：补打；退款仅店长及以上可见 -->
         <el-button size="large" @click="$router.push('/reprint')"><el-icon><Printer /></el-icon>&nbsp;补打</el-button>
         <!-- Q17：仅店长及以上可见退款入口，收银员无入口 -->
         <el-button v-if="isManager" size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
         <el-divider direction="vertical" />
-        <!-- 管理后台入口：店长及以上可进，普通按钮避免误导为激活态 -->
-        <el-button v-if="isManager" size="large" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;管理</el-button>
+        <!-- 管理后台入口：所有店员可进入（数据页仍按角色门禁），普通按钮避免误导为激活态 -->
+        <el-button size="large" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;管理</el-button>
         <el-divider direction="vertical" />
-        <!-- 系统：交接班、设置、退出 -->
+        <!-- 系统：交接班、退出 -->
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
-        <el-button size="large" @click="$router.push('/settings')"><el-icon><Setting /></el-icon>&nbsp;设置</el-button>
         <el-button size="large" @click="logout"><el-icon><SwitchButton /></el-icon>&nbsp;退出</el-button>
       </div>
     </header>
@@ -72,7 +67,12 @@
       <section class="col-cart">
         <div class="cart-head">
           <span>购物车（{{ store.cartCount }} 项）</span>
-          <el-button text @click="store.clearCart">清空</el-button>
+          <div class="cart-head-ops">
+            <el-button text @click="hangDrawer = true">
+              <el-icon><Folder /></el-icon>&nbsp;挂单<span v-if="store.hangOrders.length" class="btn-badge">{{ store.hangOrders.length }}</span>
+            </el-button>
+            <el-button text @click="store.clearCart">清空</el-button>
+          </div>
         </div>
         <div class="cart-list">
           <div v-if="store.cart.length === 0" class="cart-empty">
@@ -293,7 +293,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Search, Printer, RefreshLeft, Switch, Setting, Folder, SwitchButton, List, Menu,
+  Search, Printer, RefreshLeft, Switch, Setting, Folder, SwitchButton, Menu,
 } from '@element-plus/icons-vue'
 import { usePosStore } from '../stores/posStore'
 import { PrintService } from '../services/print/PrintService'
@@ -1169,6 +1169,11 @@ onBeforeUnmount(() => {
   font-size: 16px;
   font-weight: 600;
   color: var(--neutral-800);
+}
+.cart-head-ops {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .cart-list {
   flex: 1;
