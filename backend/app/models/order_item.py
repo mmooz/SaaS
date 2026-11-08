@@ -43,6 +43,10 @@ class OrderItem(Base):
     is_weighted: Mapped[bool] = mapped_column(Boolean, default=False)
     # 是否已打印价格标签
     label_printed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 销售单位（多单位商品记录实际售出单位，如「条」「件」；单单位商品为空，沿用 product.unit）
+    unit: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 基础单位数量（按件多单位商品 = qty × factor，用于按基础单位扣减门店库存；称重商品为空）
+    base_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 创建时间
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

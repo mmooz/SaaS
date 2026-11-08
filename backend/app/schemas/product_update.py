@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from app.schemas.unit_spec import UnitSpec
+
 
 class ProductUpdate(BaseModel):
     """更新商品请求体：全部字段可选，仅更新传入的字段。"""
@@ -34,3 +36,5 @@ class ProductUpdate(BaseModel):
     safety_stock: float | None = None
     # 是否启用
     enabled: bool | None = None
+    # 多单位换算列表：完整可售单位（含 factor=1 的基础单位）。传入会整体覆盖既有配置。
+    units: list[UnitSpec] | None = None

@@ -23,6 +23,7 @@ from app.services.excel_service import (
 from app.services.inventory_service import round_amount, round_stock
 from app.services.operation_log_service import OperationLogService
 from app.services.product_stock_service import ProductStockService
+from app.services.unit_service import UnitConfigError, build_units_list, serialize_units
 
 # 商品路由
 router = APIRouter(prefix="/api/products", tags=["商品管理"])
@@ -87,9 +88,10 @@ def list_products(
     )
     products = db.scalars(stmt).all()
     items = [ProductOut.model_validate(p) for p in products]
-    # 填充分类名称
+    # 填充分类名称与多单位列表
     for out, product in zip(items, products):
         out.category_name = product.category.name if product.category else None
+        out.units = build_units_list(product)
     fill_store_stock(db, items, list(products), store_id)
     return {"total": total, "page": query.page, "page_size": query.page_size, "items": items}
 
@@ -219,14 +221,23 @@ def create_product(
         raise HTTPException(status_code=409, detail="条码已存在")
     # Q18：兼容 B3 之前遗留的软删行（当时只打标记未改写条码），先释放占用
     release_deleted_barcode(db, tenant_id, data.barcode)
-    # 库存字段不落在商品档案上，单独写入当前门店库存表
+    # 库存字段不落在商品档案上，单独写入当前门店库存表；units 由多单位字段单独处理
+    try:
+        units_json, base_unit, base_price, base_member = serialize_units(data.units)
+    except UnitConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     product = Product(
-        **data.model_dump(exclude={"store_id", "stock", "safety_stock"}),
+        **data.model_dump(exclude={"store_id", "stock", "safety_stock", "units"}),
         tenant_id=tenant_id,
         store_id=store_id,
         stock=0,
         safety_stock=0,
+        units_json=units_json,
     )
+    if base_unit is not None:
+        product.unit = base_unit
+        product.price = base_price
+        product.member_price = base_member
     db.add(product)
     db.flush()
     ProductStockService.apply(
@@ -242,6 +253,7 @@ def create_product(
     db.commit()
     db.refresh(product)
     out = ProductOut.model_validate(product)
+    out.units = build_units_list(product)
     fill_store_stock(db, [out], [product], store_id)
     return out
 
@@ -265,6 +277,7 @@ def get_product(
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
     out = ProductOut.model_validate(product)
+    out.units = build_units_list(product)
     fill_store_stock(db, [out], [product], store_id)
     return out
 
@@ -309,6 +322,18 @@ def update_product(
     # 库存与安全库存属于当前门店，不写回商品档案
     stock = payload.pop("stock", None)
     safety_stock = payload.pop("safety_stock", None)
+    # 多单位列表整体覆盖既有配置
+    units_payload = payload.pop("units", None)
+    if units_payload is not None:
+        try:
+            units_json, base_unit, base_price, base_member = serialize_units(units_payload)
+        except UnitConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        product.units_json = units_json
+        if base_unit is not None:
+            product.unit = base_unit
+            product.price = base_price
+            product.member_price = base_member
     for key, value in payload.items():
         setattr(product, key, value)
     if product.price != old_price:
@@ -327,6 +352,7 @@ def update_product(
     db.commit()
     db.refresh(product)
     out = ProductOut.model_validate(product)
+    out.units = build_units_list(product)
     fill_store_stock(db, [out], [product], store_id)
     return out
 

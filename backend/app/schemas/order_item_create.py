@@ -30,3 +30,7 @@ class OrderItemCreate(BaseModel):
     is_weighted: bool = False
     # 是否已打印价格标签
     label_printed: bool = False
+    # 销售单位（多单位商品记录实际售出单位，如「条」「件」；单单位商品可省略）
+    unit: str | None = None
+    # 基础单位数量（按件多单位商品 = qty × factor，用于按基础单位扣减库存；称重商品可省略）
+    base_qty: float | None = None

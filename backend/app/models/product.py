@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -56,6 +57,9 @@ class Product(Base):
     member_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     # 进价（用于毛利统计）
     cost_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # 多单位换算（JSON 文本）：存储可售单位列表，每项含 unit/factor/price/member_price。
+    # factor 为该单位相当于基础单位（unit 字段）的倍数，基础单位 factor=1；为空表示仅单一单位。
+    units_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 保质期天数（生鲜属性）
     shelf_life_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 是否默认打印价格标签

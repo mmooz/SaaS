@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.snowflake_id import SnowflakeId
+from app.schemas.unit_spec import UnitSpec
 
 
 class ProductOut(BaseModel):
@@ -46,6 +47,8 @@ class ProductOut(BaseModel):
     enabled: bool
     # 预留门店 ID
     store_id: int
+    # 多单位换算列表：基础单位（factor=1）+ 其余附加单位，按 factor 升序；单单位商品返回长度 1 的列表
+    units: list[UnitSpec] = []
     # 创建与更新时间
     created_at: datetime
     updated_at: datetime

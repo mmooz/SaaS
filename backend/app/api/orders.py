@@ -388,6 +388,8 @@ def create_order(
             "amount": item.amount,
             "is_weighted": item.is_weighted,
             "label_printed": item.label_printed,
+            "unit": item.unit,
+            "base_qty": item.base_qty,
         }
         if item.id is not None:
             item_kwargs["id"] = item.id

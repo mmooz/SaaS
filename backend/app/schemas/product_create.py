@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, Field
 
+from app.schemas.unit_spec import UnitSpec
+
 
 class ProductCreate(BaseModel):
     """新增商品请求体。"""
@@ -36,3 +38,5 @@ class ProductCreate(BaseModel):
     enabled: bool = True
     # 预留门店 ID（多店扩展）
     store_id: int = 1
+    # 多单位换算列表：完整可售单位（含 factor=1 的基础单位）。不传或空表示仅单一单位。
+    units: list[UnitSpec] | None = None

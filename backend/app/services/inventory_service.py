@@ -112,7 +112,12 @@ class InventoryService:
             product = products.get(item.product_id)
             if not product:
                 continue
-            delta = -(item.weight_kg or 0) if item.is_weighted else -item.qty
+            # 多单位按件商品按基础单位数量（base_qty = qty × factor）扣减；
+            # 称重商品按重量；未传递 base_qty 的按件商品回退到 qty
+            if item.is_weighted:
+                delta = -(item.weight_kg or 0)
+            else:
+                delta = -(item.base_qty if item.base_qty is not None else item.qty)
             InventoryService.record(
                 db,
                 product,
@@ -143,8 +148,11 @@ class InventoryService:
             product = products.get(item.product_id)
             if not product:
                 continue
-            # 退货量为正，库存加回
-            delta = (item.weight_kg or 0) if item.is_weighted else item.qty
+            # 退货量为正，库存加回；多单位按件按 base_qty 回滚
+            if item.is_weighted:
+                delta = item.weight_kg or 0
+            else:
+                delta = item.base_qty if item.base_qty is not None else item.qty
             InventoryService.record(
                 db,
                 product,
