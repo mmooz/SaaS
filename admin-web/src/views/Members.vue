@@ -140,6 +140,12 @@
                   <template #default="{ row }"><span class="num gift">+{{ row.bonusPoints }}</span></template>
                 </el-table-column>
                 <el-table-column prop="method" label="操作来源" width="110" align="center" />
+                <el-table-column label="门店归属" width="160" align="center">
+                  <template #default="{ row }">
+                    <el-tag v-if="row.storeAttributionNote" size="small" type="warning" effect="light">{{ row.storeAttributionNote }}</el-tag>
+                    <span v-else class="num">可信</span>
+                  </template>
+                </el-table-column>
                 <template #empty>
                   <el-empty description="暂无充值记录" />
                 </template>
@@ -151,6 +157,10 @@
         <!-- ==================== 积分记录 ==================== -->
         <el-tab-pane label="积分记录" name="points">
           <div class="pane-body">
+            <!-- Q24：历史门店归属标注说明 -->
+            <div class="store-tip">
+              标注「历史数据门店归属不可信」的流水，其门店归属仅供参考；可信起始时间由后台配置，不影响金额与积分。
+            </div>
             <div class="toolbar">
               <el-select v-model="pointTypeFilter" placeholder="全部类型" clearable class="filter-select" @change="loadPointRecords">
                 <el-option v-for="t in pointTypes" :key="t" :label="txTypeText(t)" :value="t" />
@@ -172,6 +182,12 @@
                 </template>
               </el-table-column>
               <el-table-column prop="reason" label="原因" min-width="160" />
+              <el-table-column label="门店归属" width="160" align="center">
+                <template #default="{ row }">
+                  <el-tag v-if="row.storeAttributionNote" size="small" type="warning" effect="light">{{ row.storeAttributionNote }}</el-tag>
+                  <span v-else class="num">可信</span>
+                </template>
+              </el-table-column>
               <el-table-column label="变动值" width="110" align="right">
                 <template #default="{ row }">
                   <span class="num" :class="row.change >= 0 ? 'change-plus' : 'change-minus'">
@@ -292,6 +308,12 @@
             <template #default="{ row }"><span class="num">{{ row.time }}</span></template>
           </el-table-column>
           <el-table-column prop="reason" label="内容" min-width="200" />
+          <el-table-column label="门店归属" width="160" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.storeAttributionNote" size="small" type="warning" effect="light">{{ row.storeAttributionNote }}</el-tag>
+              <span v-else class="num">可信</span>
+            </template>
+          </el-table-column>
           <el-table-column label="变动" width="100" align="right">
             <template #default="{ row }">
               <span class="num" :class="row.change >= 0 ? 'change-plus' : 'change-minus'">
@@ -565,6 +587,9 @@ async function loadRechargeRecords() {
       amount: Number(t.amount || 0),
       bonusPoints: Number(t.points || 0),
       method: t.operator_id ? `操作员 ${t.operator_id}` : '后台充值',
+      // Q24：后端可选字段，缺省视为可信
+      storeAttributionNote:
+        t.store_attribution_reliable === false ? '历史数据门店归属不可信' : '',
     }))
   } catch (err) {
     ElMessage.error(`充值记录加载失败：${err.message}`)
@@ -636,6 +661,9 @@ const pointTypeTag = (type) => {
 function toRecordRow(t) {
   const points = Number(t.points || 0)
   const amount = Number(t.amount || 0)
+  // Q24：后端可选字段，缺省视为可信；历史流水标注门店归属仅供参考
+  const storeAttributionNote =
+    t.store_attribution_reliable === false ? '历史数据门店归属不可信' : ''
   return {
     id: t.id,
     time: fmtTime(t.created_at),
@@ -645,6 +673,7 @@ function toRecordRow(t) {
     typeText: txTypeText(t.type),
     reason: `金额 ¥${amount.toFixed(2)} · 积分 ${points >= 0 ? '+' : ''}${points}`,
     change: points,
+    storeAttributionNote,
   }
 }
 
@@ -713,6 +742,14 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+/* Q24：历史门店归属标注说明 */
+.store-tip {
+  color: var(--neutral-500);
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 10px;
 }
 
 /* 页签卡片 */

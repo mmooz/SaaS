@@ -23,6 +23,11 @@
       <el-button type="primary" plain :icon="Download" @click="exportExcel">导出 Excel</el-button>
     </div>
 
+    <!-- Q05：报表统一净额法口径说明（不写死数值，仅说明计算口径） -->
+    <div class="method-tip card">
+      报表口径：销售额 = 区间内订单实收 − 按订单关联的退款金额（净额法）；商品排行保留未退商品行并按净额分摊；日报、时段、毛利与交接班汇总复用同一退款映射，数值完全一致。
+    </div>
+
     <!-- ========== 1. 销售日报月报 ========== -->
     <div v-show="reportType === 'daily'">
       <!-- 汇总统计卡片 -->
@@ -201,6 +206,10 @@
 
     <!-- ========== 5. 会员分析 ========== -->
     <div v-show="reportType === 'member'">
+      <!-- Q24：历史门店归属标注（后端可选字段，未标注时不展示） -->
+      <div v-if="memberReport.store_attribution_note" class="method-tip card">
+        {{ memberReport.store_attribution_note }}
+      </div>
       <div class="stat-grid">
         <div class="stat-card">
           <div class="stat-icon" style="--c: var(--brand)"><el-icon :size="20"><Avatar /></el-icon></div>
@@ -340,6 +349,8 @@ const memberReport = ref({
   member_orders: 0,
   member_ratio: 0,
   repurchase_rate: 0,
+  // Q24：历史门店归属标注，后端可选字段，缺省为 null
+  store_attribution_note: null,
   items: [],
 })
 
@@ -644,19 +655,20 @@ function exportExcel() {
   let header = []
   let rows = []
   if (reportType.value === 'daily') {
-    header = ['日期/周', '销售额', '订单数']
+    // Q05：CSV 表头加注净额法口径，避免导出结果被误读为含退款的毛销售额
+    header = ['日期/周', '销售额(净额法)', '订单数']
     rows = daily.value.trend.map((t) => [t.label, t.sales, t.orders])
   } else if (reportType.value === 'rank') {
-    header = ['商品', '分类', '销量', '单位', '销售额', '占比%']
+    header = ['商品', '分类', '销量', '单位', '销售额(净额法)', '占比%']
     rows = rankData.value.map((r) => [r.name, r.category, r.qty, r.unit, r.amount, r.ratio])
   } else if (reportType.value === 'hourly') {
-    header = ['时段', '销售额', '订单数']
+    header = ['时段', '销售额(净额法)', '订单数']
     rows = hourly.value.points.map((p) => [p.label, p.sales, p.orders])
   } else if (reportType.value === 'profit') {
-    header = ['分类', '销售额', '成本', '毛利', '毛利率%']
+    header = ['分类', '销售额(净额法)', '成本', '毛利', '毛利率%']
     rows = profit.value.categories.map((c) => [c.category, c.sales, c.cost, c.profit, c.rate])
   } else {
-    header = ['会员', '等级', '消费笔数', '消费金额', '占比%']
+    header = ['会员', '等级', '消费笔数', '消费金额(净额法)', '占比%']
     rows = memberRank.value.map((m) => [m.name, levelText(m.level), m.orders, m.amount, m.ratio])
   }
   // 无数据时不生成空文件，直接提示
@@ -696,6 +708,12 @@ function exportExcel() {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+/* Q05 / Q24：净额法口径说明与历史门店归属提示条 */
+.method-tip {
+  color: var(--neutral-500);
+  font-size: 13px;
+  line-height: 1.6;
 }
 .head-left {
   display: flex;
