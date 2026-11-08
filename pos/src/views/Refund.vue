@@ -69,42 +69,26 @@
           </label>
         </div>
 
-        <!-- 权限提示：非本人当班订单需要店长授权 -->
-        <div v-if="!o.isSelf" class="auth-tip">
-          <el-icon><WarningFilled /></el-icon>&nbsp;该订单非本人当班，退款需要店长授权
+        <!-- Q17：仅店长及以上可退款，收银员只看到角色提示，不再有店长授权弹窗 -->
+        <div v-if="!isManager" class="auth-tip">
+          <el-icon><WarningFilled /></el-icon>&nbsp;仅店长可退，请使用店长 / 管理员账号登录
         </div>
 
         <div class="order-ops">
           <el-button
             type="danger"
             class="big-btn"
-            :disabled="o.status === 'refunded'"
+            :disabled="o.status === 'refunded' || !isManager"
             @click="openRefund(o, 'full')"
           >整单退款</el-button>
           <el-button
             class="big-btn"
-            :disabled="!hasChecked(o)"
+            :disabled="!hasChecked(o) || !isManager"
             @click="openRefund(o, 'item')"
           >单项退货</el-button>
         </div>
       </section>
     </div>
-
-    <!-- 店长授权弹窗 -->
-    <el-dialog v-model="authDialog" title="店长授权" width="380px">
-      <el-form label-width="70px">
-        <el-form-item label="账号">
-          <el-input v-model="authForm.username" placeholder="请输入店长/管理员账号" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model="authForm.password" type="password" show-password placeholder="请输入密码" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button class="big-btn" @click="authDialog = false">取 消</el-button>
-        <el-button type="primary" class="big-btn" :loading="authLoading" @click="authorizeManager">授 权</el-button>
-      </template>
-    </el-dialog>
 
     <!-- 退款确认弹窗 -->
     <el-dialog v-model="refundDialog" :title="refundType === 'full' ? '整单退款' : '单项退货'" width="420px">
@@ -131,7 +115,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft, Search, WarningFilled } from '@element-plus/icons-vue'
-import { fetchOrders, isNetworkError, login, refundOrder } from '../api'
+import { fetchOrders, isNetworkError, refundOrder } from '../api'
 import { offlineStore } from '../services/offline/OfflineStore'
 import { offlineSnowflake } from '../services/offline/Snowflake'
 import { usePosStore } from '../stores/posStore'
@@ -139,6 +123,10 @@ import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
 import { PrintFormatter as F } from '../services/print/PrintFormatter'
 
 const store = usePosStore()
+
+// Q17：仅店长及以上（manager / admin / super）可退款，与服务端 get_manager_user 同源。
+// 收银员端不再提供「店长授权」弹窗：退款主体一律取令牌用户，客户端授权人字段已停用。
+const isManager = computed(() => ['admin', 'manager', 'super'].includes(store.cashier?.role))
 
 const keyword = ref('')
 const loading = ref(false)
@@ -171,9 +159,7 @@ const toDisplay = (order) => ({
   time: F.datetime(order.created_at),
   mobile: order.member_mobile || '',
   payMethod: OrderPrintMapper.payMethod(order.pay_details),
-  cashierId: order.cashier_id,
   cashier: order.cashier_id ? `收银员#${order.cashier_id}` : '—',
-  isSelf: !!store.cashier && order.cashier_id === store.cashier.id,
   status: order.status,
   amount: Number(order.total_amount) || 0,
   refundedAmount: Number(order.refunded_amount) || 0,
@@ -243,13 +229,6 @@ const currentOrder = ref(null)
 const refundAmount = ref(0)
 const refundReason = ref('')
 
-// 店长授权弹窗状态
-const authDialog = ref(false)
-const authLoading = ref(false)
-const authForm = ref({ username: '', password: '' })
-// 待执行的退款动作（授权通过后继续）
-let pendingRefund = null
-
 /**
  * 打开退款确认弹窗：整单退剩余金额，单项退勾选商品合计
  * @param {object} o 订单展示模型
@@ -268,57 +247,18 @@ const prepareRefund = (o, type) => {
   refundDialog.value = true
 }
 
-// 当前操作的授权人 ID（非本人订单退款时记录）
-let authorizerId = null
-
 /**
- * 打开退款：本人当班订单直接确认；否则先走店长授权
+ * 打开退款：Q17 仅店长及以上可操作，收银员由按钮禁用与提示条拦截。
+ * 不再有客户端店长授权流程：主体与操作日志一律取服务端令牌用户。
  * @param {object} o 订单展示模型
  * @param {string} type 退款类型
  */
 const openRefund = (o, type) => {
-  if (o.isSelf) {
-    authorizerId = null
-    prepareRefund(o, type)
+  if (!isManager.value) {
+    ElMessage.warning('仅店长可退，请使用店长 / 管理员账号登录')
     return
   }
-  // 离线状态无法校验店长账号，限制为本人订单退款
-  if (offlineMode.value || !navigator.onLine) {
-    ElMessage.warning('离线状态仅支持本人当班订单退款，非本人订单请联网后退款')
-    return
-  }
-  pendingRefund = { order: o, type }
-  authForm.value = { username: '', password: '' }
-  authDialog.value = true
-}
-
-/**
- * 店长授权：校验账号角色为店长/管理员后继续退款流程
- * @returns {Promise<void>}
- */
-const authorizeManager = async () => {
-  if (!authForm.value.username || !authForm.value.password) {
-    ElMessage.warning('请输入账号与密码')
-    return
-  }
-  authLoading.value = true
-  try {
-    const res = await login(authForm.value.username, authForm.value.password)
-    if (!['admin', 'manager'].includes(res.user.role)) {
-      ElMessage.warning('该账号不是店长或管理员，无法授权')
-      return
-    }
-    authorizerId = res.user.id
-    authDialog.value = false
-    if (pendingRefund) {
-      prepareRefund(pendingRefund.order, pendingRefund.type)
-      pendingRefund = null
-    }
-  } catch (err) {
-    ElMessage.error(`授权失败：${err.message}`)
-  } finally {
-    authLoading.value = false
-  }
+  prepareRefund(o, type)
 }
 
 // 确认退款：调用后端退款接口并刷新列表
@@ -335,14 +275,13 @@ const confirmRefund = async () => {
   const refundNo = `RF${offlineSnowflake.nextId()}`
   const createdAt = new Date().toISOString()
   try {
+    // Q17：不再传 cashier_id / authorizer_id，退款主体由服务端令牌用户决定
     const record = await refundOrder(orderNo, {
       refundNo,
       createdAt,
       refundType: refundType.value,
       itemIds,
       reason: refundReason.value.trim(),
-      cashierId: store.cashier ? store.cashier.id : null,
-      authorizerId,
     })
     ElMessage.success(`退款成功，金额 ¥${Number(record.amount).toFixed(2)}`)
     refundDialog.value = false
@@ -398,8 +337,6 @@ const saveLocalRefund = async (orderNo, itemIds, refundNo, createdAt) => {
       refund_type: refundType.value,
       item_ids: itemIds,
       reason: refundReason.value.trim() || null,
-      cashier_id: store.cashier ? store.cashier.id : null,
-      authorizer_id: authorizerId,
       created_at: createdAt,
     },
     createdAt,

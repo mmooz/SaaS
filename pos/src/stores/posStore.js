@@ -34,6 +34,46 @@ const LS_OFFLINE = 'pos_offline_orders' // 待上传订单队列
 const LS_CASHIER = 'pos_cashier' // 已登录收银员（重启后保持登录）
 const LS_SHIFT = 'pos_shift_id' // 当前进行中的班次 ID（订单归属用）
 
+// Q14：称重统一 3 位小数（kg），与后端 inventory_service.STOCK_PRECISION_DIGITS 对齐；
+// 金额仍 2 位小数。列类型 Numeric(10,3) 随 PG / Q13，B3 只统一取整口径。
+const WEIGHT_PRECISION_DIGITS = 3
+
+// R20 临时管控（Q06 完成后由 B4 统一解除，不得写成永久业务逻辑）。
+// 开关默认关闭；限额 / 时限数值一律来自部署构建环境变量，与后端 config.py /
+// .env.example 同源，业务代码不硬编码任何金额 / 时限数字，产品确认数值后
+// 只改配置、不发版。未注入本地策略时不做数值判断，服务端 orders.py 的 R20
+// 守卫为最终裁决：超限补传返回业务错误，按 R12 分流不会进入离线队列。
+// ⚠️ Q06 结算原子化完成前严禁把 VITE_ONLINE_STORED_VALUE_PAYMENT_ENABLED 设为 true。
+const R20_STORED_VALUE_ENABLED =
+  String(import.meta.env.VITE_ONLINE_STORED_VALUE_PAYMENT_ENABLED || '').toLowerCase() === 'true'
+const R20_OFFLINE_MAX_AMOUNT = Number(import.meta.env.VITE_OFFLINE_ORDER_MAX_AMOUNT)
+const R20_OFFLINE_MAX_AGE_HOURS = Number(import.meta.env.VITE_OFFLINE_ORDER_MAX_AGE_HOURS)
+const MS_PER_HOUR = 60 * 60 * 1000
+
+/**
+ * R20：离线订单入队前的金额 / 时限守卫。
+ * 文案只说「当前策略允许的限额 / 时限」，不写死数值；数值由部署配置注入。
+ * @param {object} order 待入队的订单载荷
+ * @returns {string} 拒绝原因，空串表示允许入队
+ */
+function offlinePolicyError(order) {
+  const amount = Number(order.total_amount || 0)
+  if (
+    Number.isFinite(R20_OFFLINE_MAX_AMOUNT) &&
+    R20_OFFLINE_MAX_AMOUNT > 0 &&
+    amount > R20_OFFLINE_MAX_AMOUNT
+  ) {
+    return '订单金额超过当前策略允许的限额，请分单结算或改用在线收银（临时管控，Q06 完成后由 B4 解除）'
+  }
+  if (Number.isFinite(R20_OFFLINE_MAX_AGE_HOURS) && R20_OFFLINE_MAX_AGE_HOURS > 0) {
+    const ageHours = (Date.now() - new Date(order.created_at).getTime()) / MS_PER_HOUR
+    if (ageHours > R20_OFFLINE_MAX_AGE_HOURS) {
+      return '订单超出当前策略允许的补传时限，请联系管理员人工处理（临时管控，Q06 完成后由 B4 解除）'
+    }
+  }
+  return ''
+}
+
 /**
  * 从 localStorage 读取 JSON，解析失败返回默认值
  * @param {string} key 键名
@@ -385,7 +425,7 @@ export const usePosStore = defineStore('pos', {
         categoryId: product.categoryId ?? null,
         qty: 1,
         weighted: true,
-        weight: +weight.toFixed(2),
+        weight: +weight.toFixed(WEIGHT_PRECISION_DIGITS),
         amount,
         weightKey: Date.now(),
       })
@@ -447,6 +487,13 @@ export const usePosStore = defineStore('pos', {
      * @returns {Promise<{ok:boolean, offline:boolean, orderNo:string, order:object, memberDeducted:boolean}>} 上传结果与本次订单数据
      */
     async settle(payload) {
+      // R20：在线储值支付临时下线，按开关拒绝。开关临时打开时走下方原扣款逻辑，
+      // ⚠️ Q06 结算原子化完成前严禁开启（存在「不扣先返」资损闭环）。
+      if (payload.payMethod === '储值' && !R20_STORED_VALUE_ENABLED) {
+        throw new Error(
+          '在线储值支付已临时下线（临时管控，Q06 完成后由 B4 解除），请改用其它支付方式',
+        )
+      }
       const orderNo = this.buildOrderNo()
       // 请求中快照会员，避免结算过程中会员状态被清除
       const member = this.member
@@ -502,7 +549,7 @@ export const usePosStore = defineStore('pos', {
         await uploadOrder(order)
         this.clearCart()
         await offlineStore.saveLocalOrder({ ...order, synced: true })
-        // 储值支付：在线扣减会员余额并按金额累计积分
+        // 储值支付：仅 R20 开关临时开启时可达，在线扣减会员余额并按金额累计积分
         let memberDeducted = false
         if (member && payload.payMethod === '储值') {
           try {
@@ -526,6 +573,17 @@ export const usePosStore = defineStore('pos', {
             console.error('[settle] 回滚本机订单失败', rollbackErr)
           }
           throw err
+        }
+        // R20：离线订单入队前的金额 / 时限守卫。超限 / 超时不入队，
+        // 并回滚先前的本机落库，避免残留一条永远无法补传的无效单。
+        const policyError = offlinePolicyError(order)
+        if (policyError) {
+          try {
+            await offlineStore.removeLocalOrder(orderNo)
+          } catch (rollbackErr) {
+            console.error('[settle] 回滚本机订单失败', rollbackErr)
+          }
+          throw new Error(policyError)
         }
         // 上传失败（网络不可用）：写入离线队列，联网后自动补传
         await offlineStore.queueItem('order', orderNo, { ...order, offline: true }, now)
@@ -612,14 +670,13 @@ export const usePosStore = defineStore('pos', {
       const pendingRefunds = await offlineStore.listQueue('refund')
       for (const item of pendingRefunds) {
         try {
+          // Q17：退款主体由服务端令牌用户决定，不再传客户端 cashier_id / authorizer_id
           await apiRefundOrder(item.payload.order_no, {
             refundNo: item.payload.refund_no,
             createdAt: item.payload.created_at,
             refundType: item.payload.refund_type,
             itemIds: item.payload.item_ids,
             reason: item.payload.reason,
-            cashierId: item.payload.cashier_id,
-            authorizerId: item.payload.authorizer_id,
           })
           await offlineStore.removeQueueItem('refund', item.key)
         } catch (err) {

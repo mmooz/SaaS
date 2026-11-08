@@ -14,7 +14,8 @@
       <div class="header-actions">
         <el-button size="large" @click="hangDrawer = true"><el-icon><Folder /></el-icon>&nbsp;挂单</el-button>
         <el-button size="large" @click="$router.push('/reprint')"><el-icon><Printer /></el-icon>&nbsp;补打</el-button>
-        <el-button size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
+        <!-- Q17：仅店长及以上可见退款入口，收银员无入口 -->
+        <el-button v-if="isManager" size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
         <el-button size="large" @click="$router.push('/settings')"><el-icon><Setting /></el-icon></el-button>
         <el-button size="large" @click="logout"><el-icon><SwitchButton /></el-icon>&nbsp;退出</el-button>
@@ -74,7 +75,7 @@
               <div class="ci-name">{{ item.name }}</div>
               <div class="ci-sub num">
                 <template v-if="item.weighted">
-                  {{ item.weight.toFixed(2) }} kg × ¥{{ store.itemPrice(item).toFixed(2) }}
+                  {{ item.weight.toFixed(3) }} kg × ¥{{ store.itemPrice(item).toFixed(2) }}
                 </template>
                 <template v-else>× {{ item.qty }} · ¥{{ store.itemPrice(item).toFixed(2) }}</template>
               </div>
@@ -150,8 +151,15 @@
             <button class="pay-btn" @click="openPay('现金')">💵 现金</button>
             <button class="pay-btn blue" @click="openPay('微信')">📱 微信</button>
             <button class="pay-btn blue2" @click="openPay('支付宝')">📱 支付宝</button>
-            <button class="pay-btn orange" @click="openPay('储值')">💳 储值</button>
+            <!-- R20：在线储值支付临时下线，按钮禁用并给出不含写死数值的产品文案 -->
+            <button
+              class="pay-btn orange"
+              :disabled="!r20StoredValueEnabled"
+              :title="r20Tip"
+              @click="openPay('储值')"
+            >💳 储值</button>
           </div>
+          <div class="r20-tip">{{ r20Tip }}</div>
           <div class="print-row">
             <el-checkbox v-model="autoPrint" size="large" @change="saveAutoPrint">
               结算后自动打印小票 / 标签
@@ -249,6 +257,18 @@ const store = usePosStore()
 // 当前登录收银员名称（未登录时显示提示）
 const cashierName = computed(() => (store.cashier ? store.cashier.name : '未登录'))
 
+// Q17：仅店长及以上（manager / admin / super）可进入退款，与服务端 get_manager_user 同源
+const isManager = computed(() => ['admin', 'manager', 'super'].includes(store.cashier?.role))
+
+// R20 临时管控（Q06 完成后由 B4 统一解除）：与 posStore.js 共用同一构建期开关。
+// 开关临时打开时走原储值支付逻辑，⚠️ Q06 结算原子化完成前严禁开启。
+const r20StoredValueEnabled =
+  String(import.meta.env.VITE_ONLINE_STORED_VALUE_PAYMENT_ENABLED || '').toLowerCase() === 'true'
+// 文案只说「当前策略允许的限额 / 时限」，不写死金额与时限数值；
+// 数值由后端 config.py / .env.example 统一配置，产品确认后只改配置、不发版。
+const r20Tip =
+  '在线储值支付已临时下线；离线订单按当前策略执行限额 / 时限校验（临时管控，Q06 完成后由 B4 解除）'
+
 // 退出登录：清空收银员会话并返回登录页
 const logout = () => {
   store.clearCashier()
@@ -344,7 +364,7 @@ const handleScan = () => {
     }
     store.confirmWeighted(product, label.weight)
     keyword.value = ''
-    ElMessage.success(`${product.name} ${label.weight.toFixed(2)}kg · ¥${(label.weight * product.price).toFixed(2)}`)
+    ElMessage.success(`${product.name} ${label.weight.toFixed(3)}kg · ¥${(label.weight * product.price).toFixed(2)}`)
     return
   }
 
@@ -377,9 +397,10 @@ const loadScaleSettings = () => {
 // 当前生效的秤设置（连接与稳定判定使用）
 const scaleSettings = loadScaleSettings()
 
+// Q14：重量显示统一 3 位小数（kg），与 posStore.js 与后端库存流水口径一致
 const weightDisplay = computed(() => {
-  if (manualWeight.value) return '0.00'
-  return weight.value.toFixed(2)
+  if (manualWeight.value) return '0.000'
+  return weight.value.toFixed(3)
 })
 const weightUnit = computed(() => (currentProduct.value ? 'kg' : ''))
 const scaleStable = computed(() => weightStable.value)
@@ -468,7 +489,7 @@ const confirmWeight = () => {
   if (net <= 0.001 || !currentProduct.value) return
   const p = currentProduct.value
   store.confirmWeighted(p, net)
-  ElMessage.success(`${p.name} ${net.toFixed(2)}kg · ¥${(net * p.price).toFixed(2)}`)
+  ElMessage.success(`${p.name} ${net.toFixed(3)}kg · ¥${(net * p.price).toFixed(2)}`)
   stopWeighing()
   currentProduct.value = null
 }
@@ -590,6 +611,11 @@ const openPay = (method) => {
     ElMessage.warning('购物车为空')
     return
   }
+  // R20：储值支付临时下线（按钮已禁用，此处兜底），文案不写死数值
+  if (method === '储值' && !r20StoredValueEnabled) {
+    ElMessage.warning(r20Tip)
+    return
+  }
   // 储值支付必须先识别会员且有足够余额
   if (method === '储值') {
     if (!store.member) {
@@ -621,6 +647,11 @@ const saveAutoPrint = (value) => {
 
 // 确认收款：上传订单到服务端，失败则离线保存；成功后按设置自动打印
 const confirmPay = async () => {
+  // R20：策略变更时支付弹窗可能仍开着，确认收款前再拦一次（文案不写死数值）
+  if (payMethod.value === '储值' && !r20StoredValueEnabled) {
+    ElMessage.warning(r20Tip)
+    return
+  }
   if (payMethod.value === '现金') {
     const rec = parseFloat(cashReceived.value)
     if (isNaN(rec) || rec < store.totalAmount) {
@@ -1205,6 +1236,13 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+/* R20：临时管控产品文案，不含写死的金额 / 时限数值 */
+.r20-tip {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--neutral-500);
+  margin-top: 8px;
 }
 .pay-btn {
   padding: 16px 0;
