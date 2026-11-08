@@ -16,7 +16,9 @@ from app.schemas.member_points_adjust import MemberPointsAdjust
 from app.schemas.member_recharge import MemberRecharge
 from app.schemas.member_transaction_out import MemberTransactionOut
 from app.schemas.member_update import MemberUpdate
+from app.services.member_tx_store_service import is_store_attribution_reliable
 from app.services.operation_log_service import OperationLogService
+from app.services.report_net import net_order, refund_map
 from app.services.setting_service import MAX_RECHARGE_AMOUNT, SettingService
 
 # 会员路由
@@ -47,7 +49,14 @@ def create_member(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """会员建档：同租户手机号已存在则返回 409。"""
+    """会员建档：同租户手机号已存在则返回 409。
+
+    需求变更登记（Q17 / 拍板 1，B3 **不改代码、门槛维持 manager 及以上**）：
+    基线写「收银员可建档」，与当前 ``get_manager_user`` 门槛存在偏差，但「手机号
+    建档」功能本身已实现（按 mobile + tenant_id 查重），偏差仅在角色门槛，属需求
+    变更而非功能缺失。建档是资金账户创建入口，放宽到 cashier 会扩大资损面，与
+    R5 / Q06 的收紧方向相反；如产品确需放宽须单独拍板并配套操作日志与 R5 校验。
+    """
     # 手机号唯一性校验（限定当前租户）
     existing = db.scalar(
         select(Member).where(Member.mobile == data.mobile, Member.tenant_id == tenant_id)
@@ -139,27 +148,29 @@ def member_stats(
         .order_by(Member.total_spent.desc())
         .limit(10)
     ).all()
+    # Q05（A.6 #3 隐性波及点）：会员概览与日报 / 班次统一净额法，
+    # 去掉 status == "paid" 过滤，退款后整单不再从统计中消失。
+    # 退款映射按订单关联统计（口径见 services/report_net.py），本月消费累加订单净额。
     member_ids = [m.id for m in top_members]
     order_counts: dict[int, int] = {}
     month_spent: dict[int, float] = {}
     if member_ids:
-        count_rows = db.execute(
-            select(Order.member_id, func.count(Order.id)).where(
-                Order.member_id.in_(member_ids),
-                Order.status == "paid",
-                Order.store_id == store_id,
-            ).group_by(Order.member_id)
-        ).all()
-        order_counts = {mid: cnt for mid, cnt in count_rows}
-        month_rows = db.execute(
-            select(Order.member_id, func.sum(Order.total_amount)).where(
-                Order.member_id.in_(member_ids),
-                Order.status == "paid",
-                Order.store_id == store_id,
-                Order.created_at >= month_start,
-            ).group_by(Order.member_id)
-        ).all()
-        month_spent = {mid: float(amount or 0) for mid, amount in month_rows}
+        member_orders = list(
+            db.scalars(
+                select(Order).where(
+                    Order.member_id.in_(member_ids),
+                    Order.store_id == store_id,
+                )
+            ).all()
+        )
+        refunds = refund_map(db, month_start, now, store_id, orders=member_orders)
+        for order in member_orders:
+            order_counts[order.member_id] = order_counts.get(order.member_id, 0) + 1
+            if order.created_at and order.created_at >= month_start:
+                month_spent[order.member_id] = (
+                    month_spent.get(order.member_id, 0.0)
+                    + net_order(order, refunds)
+                )
 
     return {
         "total": total,
@@ -221,6 +232,8 @@ def list_all_transactions(
         member = members.get(row.member_id)
         item["mobile"] = member.mobile if member else None
         item["member_name"] = member.name if member else None
+        # Q24：流水级门店归属标注（零回填，仅依据配置基线判定历史数据）
+        item["store_attribution_reliable"] = is_store_attribution_reliable(row.created_at)
         items.append(item)
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
@@ -278,7 +291,10 @@ def recharge_member(
             status_code=400,
             detail=f"单笔充值金额不得超过 {MAX_RECHARGE_AMOUNT:.0f} 元",
         )
-    # Q02：赠送积分由服务端 system_settings 配置读取，忽略客户端传值
+    # R4 / Q02：赠送积分由服务端 system_settings 配置读取，忽略客户端传值。
+    # 数值来源改为后台已有输入控件 rechargeGift（百分比，由 SettingService 换算为
+    # 每元赠送积分），运营在「储值充值赠送比例」的配置即刻生效；
+    # 原 rechargeBonusPointsPerYuan 无任何 UI 控件的契约断层已废弃（见 setting_service）。
     _, bonus_per_yuan = SettingService.get_member_point_config(db, tenant_id, store_id)
     bonus_points = int(data.amount * bonus_per_yuan)
     # 增加储值余额（充值金额 + 赠送金额）
@@ -404,9 +420,15 @@ def list_transactions(
         .offset((page - 1) * page_size)
         .limit(page_size)
     ).all()
+    # Q24：逐条标注门店归属是否可信（新增可选字段，不改既有字段与状态码）
+    items = []
+    for row in rows:
+        item = MemberTransactionOut.model_validate(row).model_dump()
+        item["store_attribution_reliable"] = is_store_attribution_reliable(row.created_at)
+        items.append(item)
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [MemberTransactionOut.model_validate(r) for r in rows],
+        "items": items,
     }
