@@ -52,7 +52,7 @@ backend\.venv\Scripts\python.exe -X utf8 backend\tools\rotate_weak_passwords.py 
 
 一键脚本**不会**写入 `backend/pos.db`、不会执行 `alembic upgrade head`、不会执行弱口令轮换、不包含也不输出任何明文口令。数据库迁移与账号轮换仍是有意保留的显式运维动作。
 
-`backend/pos.db.bak.*` 两份备份含旧口令哈希与全量业务数据，属于敏感文件（已排除版本控制），请按敏感数据保管或销毁。
+`backend/pos.db.bak.*` 备份含旧口令哈希与全量业务数据，属于敏感文件（已排除版本控制），请按敏感数据保管或销毁。截至 2026-11-08 共 3 份（迁移前、轮换前、乱码修复前）。
 
 ## 常见问题
 
@@ -65,5 +65,7 @@ backend\.venv\Scripts\python.exe -X utf8 backend\tools\rotate_weak_passwords.py 
 | 提示迁移未到 head | 在 `backend` 目录执行 `.venv\Scripts\python.exe -m alembic upgrade head` |
 | 登录一直 403「请先修改密码」 | 属 R19 强制改密，按登录页引导改密后重新登录 |
 | 离线订单被拒绝 | R20 临时资金管控：离线单限额 / 时限由 `backend/.env` 控制，在线储值支付默认关闭 |
+| 商品名显示 `???` / 分类显示 `??` | 11-05 历史示例数据中文写入时被逐字替换为问号，非前端 bug；本项目库已于 2026-11-08 修复。若其它环境出现同类乱码，可先 dry-run 再 `--apply`：`backend\.venv\Scripts\python.exe -X utf8 backend\tools\fix_mojibake_demo_data.py --apply` |
+| 修复数据后 POS 仍显示旧名字 | POS 用 localStorage 做离线缓存，点一次商品同步即可；分类 / 促销为全量下发，商品 / 会员走 `updated_at` 增量。仍不刷新可清 localStorage 后重载 |
 
 更多整改背景与遗留风险见 `.trae/documents/电子秤收银系统整改清单.md`，B3 与 PostgreSQL 迁移设计见 `.trae/documents/鲜衡云B3与PG迁移增量设计.md`。
