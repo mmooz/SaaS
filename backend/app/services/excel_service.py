@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Category, Product
 from app.schemas.import_result import ImportResult, ImportRowError
+from app.services.inventory_service import round_stock
 from app.services.product_stock_service import ProductStockService
 
 # 商品 Excel 列定义
@@ -27,6 +28,53 @@ COLUMNS = [
     "安全库存",
     "启用",
 ]
+
+# Q23：导入文件大小上限，防止超大工作簿拖垮内存 / 长时间占用事务。
+# 服务层与 API 层共用同一常量（API 超限返回 413，服务层作为防御纵深再校验一次）。
+MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024
+
+# Q18：软删商品条码占位前缀。雪花 ID 最长 19 位 + 1 位前缀 = 20 字符，
+# 仍在 Product.barcode 的 String(32) 范围内，不需要改列定义或唯一索引。
+BARCODE_DELETED_PREFIX = "D"
+
+
+def deleted_barcode(product_id: int) -> str:
+    """生成软删商品的条码占位值（Q18 过渡方案）。
+
+    同租户条码唯一索引是物理唯一的，软删行仍会占用原条码。删除商品或导入
+    命中历史软删行时，把该行条码改写为 ``D{id}`` 释放占用，使原条码可复用。
+    PG baseline 改为部分唯一索引 ``WHERE deleted = false`` 后可移除该逻辑。
+
+    :param product_id: 被软删商品的主键 ID
+    :return: 占位条码（长度不超过 20 字符）
+    """
+    return f"{BARCODE_DELETED_PREFIX}{product_id}"
+
+
+def release_deleted_barcode(db: Session, tenant_id: int, barcode: str) -> int:
+    """释放被历史软删记录占用的指定条码（Q18）。
+
+    B3 之前删除的商品只打了 ``deleted=True`` 标记，条码未改写，仍持有唯一
+    索引键。新建 / 改条码 / Excel 导入前调用本函数，把这些遗留行的条码改写
+    为 ``D{id}``，避免插入时触发唯一约束冲突。
+
+    :param db: 数据库会话
+    :param tenant_id: 所属租户 ID（唯一索引含租户维度）
+    :param barcode: 待释放的条码
+    :return: 被改写释放的软删行数
+    """
+    rows = db.scalars(
+        select(Product).where(
+            Product.barcode == barcode,
+            Product.tenant_id == tenant_id,
+            Product.deleted.is_(True),
+        )
+    ).all()
+    for row in rows:
+        row.barcode = deleted_barcode(row.id)
+    if rows:
+        db.flush()
+    return len(rows)
 
 
 class ExcelService:
@@ -66,6 +114,11 @@ class ExcelService:
     ) -> ImportResult:
         """解析 Excel 并批量导入/更新商品，返回导入结果。
 
+        Q23：每行独立 SAVEPOINT，失败行只回滚自身写入；``category_cache`` /
+        ``barcode_cache`` 是 Python 层字典，SAVEPOINT 不会回滚它们，故每行
+        进入前做快照，失败时整体还原，避免后续行引用已回滚 ORM 对象抛
+        ``InvalidRequestError``。
+
         :param db: 数据库会话
         :param file_bytes: Excel 文件字节流
         :param tenant_id: 所属租户 ID
@@ -73,6 +126,9 @@ class ExcelService:
         :return: 导入结果
         """
         result = ImportResult()
+        # Q23：load_workbook 之前先限制大小，超限直接拒绝，不进入解析
+        if len(file_bytes) > MAX_IMPORT_FILE_BYTES:
+            raise ValueError("导入文件超过系统允许的大小上限，请拆分后重试")
         wb = load_workbook(BytesIO(file_bytes))
         ws = wb.active
 
@@ -91,22 +147,42 @@ class ExcelService:
 
         for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             result.total += 1
+            values = list(row)
+            # 空行跳过
+            if not values or all(v is None or str(v).strip() == "" for v in values):
+                continue
+
+            # 缓存快照：SAVEPOINT 只回滚数据库，Python 层缓存必须单独还原
+            category_snapshot = dict(category_cache)
+            barcode_snapshot = dict(barcode_cache)
             try:
-                values = list(row)
-                # 空行跳过
-                if not values or all(v is None or str(v).strip() == "" for v in values):
-                    continue
-                product = self._parse_row(
-                    db, row_idx, values, category_cache, barcode_cache, tenant_id, store_id
+                # Q23：单行写入包在 SAVEPOINT 内；异常离开 with 时由 SQLAlchemy
+                # 回滚该 SAVEPOINT，其余已成功行不受影响。
+                with db.begin_nested():
+                    product, created = self._parse_row(
+                        db, row_idx, values, category_cache, barcode_cache, tenant_id, store_id
+                    )
+            except Exception as exc:
+                # 还原缓存（删除本行新增条目，并恢复被本行覆盖的旧条目）
+                category_cache.clear()
+                category_cache.update(category_snapshot)
+                barcode_cache.clear()
+                barcode_cache.update(barcode_snapshot)
+                # 校验类错误保留原始说明；数据库/未知异常收敛为通用文案，
+                # 避免把 SQL 细节暴露给前端，同时不影响其余行继续导入。
+                message = (
+                    str(exc)
+                    if isinstance(exc, ValueError)
+                    else "该行数据写入失败，请检查是否与现有记录冲突后重试"
                 )
-                result.success += 1
-                if product.id:
-                    result.updated += 1
-                else:
-                    result.created += 1
-            except ValueError as exc:
                 result.failed += 1
-                result.errors.append(ImportRowError(row=row_idx, error=str(exc)))
+                result.errors.append(ImportRowError(row=row_idx, error=message))
+                continue
+            result.success += 1
+            if created:
+                result.created += 1
+            else:
+                result.updated += 1
 
         db.commit()
         return result
@@ -120,7 +196,7 @@ class ExcelService:
         barcode_cache: dict[str, Product],
         tenant_id: int,
         store_id: int,
-    ) -> Product:
+    ) -> tuple[Product, bool]:
         """解析单行数据并按条码 upsert 商品。
 
         :param db: 数据库会话
@@ -130,7 +206,7 @@ class ExcelService:
         :param barcode_cache: 条码缓存
         :param tenant_id: 所属租户 ID
         :param store_id: 所属门店 ID
-        :return: 商品 ORM 对象
+        :return: (商品 ORM 对象, 是否新建)
         """
         (barcode, name, pinyin, category_name, pricing_mode, unit,
          price, member_price, cost_price, shelf_life, stock, safety_stock, enabled) = (
@@ -164,17 +240,18 @@ class ExcelService:
         category_id = self._resolve_category(db, category_name, category_cache, tenant_id, store_id)
 
         # 按条码查找已有商品（租户级共享，同租户内唯一，使用缓存避免重复查询）
+        # Q18：查重排除软删行；历史软删行仍占唯一索引时，改写其条码释放占用。
         product = barcode_cache.get(barcode)
         if product is None:
             product = db.scalar(
                 select(Product).where(
-                    Product.barcode == barcode, Product.tenant_id == tenant_id
+                    Product.barcode == barcode,
+                    Product.tenant_id == tenant_id,
+                    Product.deleted.is_(False),
                 )
             )
-        # 条码对应商品已软删除，保留数据不能再被导入覆盖
-        if product is not None and product.deleted:
-            raise ValueError(f"条码 {barcode} 对应的商品已删除，请使用新条码或先恢复商品")
 
+        created = False
         if product:
             # 更新已有商品（库存写入当前导入门店，不落在商品档案上）
             product.name = name
@@ -188,6 +265,8 @@ class ExcelService:
             product.shelf_life_days = shelf_life
             product.enabled = enabled
         else:
+            # Q18：先释放 B3 之前遗留的软删行条码占位，再新建，避免唯一键冲突
+            release_deleted_barcode(db, tenant_id, barcode)
             # 新建商品
             product = Product(
                 tenant_id=tenant_id,
@@ -208,12 +287,13 @@ class ExcelService:
             )
             db.add(product)
             db.flush()  # 立即获取自增 ID，确保统计 created/updated 准确
+            created = True
         # 库存/安全库存写入当前门店库存表
         ProductStockService.apply(
             db, product, store_id, stock=stock, safety_stock=safety_stock
         )
         barcode_cache[barcode] = product
-        return product
+        return product, created
 
     def export_products(self, db: Session, tenant_id: int, store_id: int) -> BytesIO:
         """导出本租户全部商品为 Excel（库存取当前门店），返回字节流。
@@ -251,7 +331,7 @@ class ExcelService:
                     p.member_price or "",
                     p.cost_price or "",
                     p.shelf_life_days or "",
-                    round(row.stock or 0, 3) if row else 0,
+                    round_stock(row.stock) if row else 0,
                     (row.safety_stock or 0) if row else 0,
                     "是" if p.enabled else "否",
                 ]
@@ -305,7 +385,7 @@ class ExcelService:
         if not category_name:
             return None
         name = str(category_name).strip()
-        # 归一化分隔符（支持 "/" 和 "/"）
+        # 归一化分隔符（支持 "/" 和 "\\"）
         parts = [p.strip() for p in name.replace("\\", "/").split("/") if p.strip()]
         if not parts:
             return None
