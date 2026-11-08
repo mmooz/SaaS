@@ -312,7 +312,7 @@ export function createMember(data) {
 export function rechargeMember(memberId, data) {
   return request(`/api/members/${memberId}/recharge`, {
     method: 'POST',
-    body: JSON.stringify({ amount: data.amount }),
+    body: JSON.stringify({ amount: data.amount, gift_amount: data.giftAmount || 0 }),
   })
 }
 
@@ -419,4 +419,286 @@ export function closeShift(shiftId, data = {}) {
       remark: data.remark || null,
     }),
   })
+}
+
+/**
+ * 把对象转为查询字符串（忽略空值，避免把空串拼进 URL）
+ * @param {object} params 查询参数
+ * @returns {string} 查询串（含前导 ?）
+ */
+function query(params = {}) {
+  const pairs = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+  return pairs.length ? `?${pairs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}` : ''
+}
+
+/**
+ * 以表单方式上传文件（Excel 导入用），自动携带令牌与当前门店 ID
+ * @param {string} path 接口路径
+ * @param {File} file 上传文件
+ * @returns {Promise<any>} 解析后的数据
+ */
+async function upload(path, file) {
+  const token = getAuthToken()
+  const storeId = getCurrentStore()
+  const form = new FormData()
+  form.append('file', file)
+  const headers = { ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+  if (storeId) headers['X-Store-Id'] = storeId
+  const res = await fetch(`${BASE_URL}${path}`, { method: 'POST', headers, body: form })
+  if (res.status === 401 && token) {
+    clearAuthToken()
+    clearStoreInfo()
+    if (window.location.pathname !== '/login') window.location.href = '/login'
+    throw new ApiError('登录已过期，请重新登录', 401)
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.detail || `上传失败(${res.status})`, res.status)
+  }
+  return res.json()
+}
+
+/* ---------------- 分类 ---------------- */
+
+/** 查询当前门店分类树 */
+export function fetchCategoryTree() {
+  return request('/api/categories/tree')
+}
+/** 查询分类树（兼容旧调用名） */
+export function fetchCategories() {
+  return fetchCategoryTree()
+}
+/** 新增分类 { name, parentId, sort, enabled } */
+export function createCategory(data) {
+  return request('/api/categories', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: data.name,
+      parent_id: data.parentId ?? null,
+      sort: data.sort ?? 0,
+      enabled: data.enabled ?? true,
+    }),
+  })
+}
+/** 更新分类 { name, parentId, sort, enabled } */
+export function updateCategory(id, data) {
+  return request(`/api/categories/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      name: data.name,
+      parent_id: data.parentId ?? null,
+      sort: data.sort ?? 0,
+      enabled: data.enabled ?? true,
+    }),
+  })
+}
+/** 删除分类 */
+export function deleteCategory(id) {
+  return request(`/api/categories/${id}`, { method: 'DELETE' })
+}
+
+/* ---------------- 商品 ---------------- */
+
+/**
+ * 分页查询当前门店商品
+ * @param {object} params { keyword, categoryId, pricingMode, enabled, page, pageSize }
+ */
+export function fetchProducts(params = {}) {
+  return request(
+    `/api/products${query({
+      keyword: params.keyword,
+      category_id: params.categoryId,
+      pricing_mode: params.pricingMode,
+      enabled: params.enabled,
+      page: params.page,
+      page_size: params.pageSize || 200,
+    })}`,
+  )
+}
+/** 新增商品（后端字段命名） */
+export function createProduct(data) {
+  return request('/api/products', { method: 'POST', body: JSON.stringify(data) })
+}
+/** 更新商品 */
+export function updateProduct(id, data) {
+  return request(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+}
+/** 删除商品 */
+export function deleteProduct(id) {
+  return request(`/api/products/${id}`, { method: 'DELETE' })
+}
+/** 批量改价 { mode, categoryId, productIds, adjustType, value } */
+export function batchAdjustPrice(data) {
+  return request('/api/products/batch-price', {
+    method: 'POST',
+    body: JSON.stringify({
+      mode: data.mode,
+      category_id: data.categoryId ?? null,
+      product_ids: data.productIds || [],
+      adjust_type: data.adjustType,
+      value: data.value,
+    }),
+  })
+}
+/** Excel 导入商品 */
+export function importProducts(file) {
+  return upload('/api/products/import', file)
+}
+/** 商品导出地址（浏览器直接下载） */
+export function productExportUrl() {
+  return `${BASE_URL}/api/products/export`
+}
+/** 商品导入模板下载地址 */
+export function productTemplateUrl() {
+  return `${BASE_URL}/api/products/import-template`
+}
+
+/* ---------------- 会员 ---------------- */
+
+/** 分页查询本店会员 { keyword, page, pageSize } */
+export function fetchMembers(params = {}) {
+  return request(`/api/members${query({ keyword: params.keyword, page: params.page, page_size: params.pageSize })}`)
+}
+/** 更新会员姓名/等级 { name, level } */
+export function updateMember(id, data) {
+  return request(`/api/members/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+/** 会员积分调整（正增负减） */
+export function adjustPoints(id, points) {
+  return request(`/api/members/${id}/points`, { method: 'POST', body: JSON.stringify({ points }) })
+}
+/** 会员概览统计 */
+export function fetchMemberStats() {
+  return request('/api/members/stats')
+}
+/** 分页查询会员流水 { memberId, type, page, pageSize } */
+export function fetchMemberTransactions(params = {}) {
+  return request(
+    `/api/members/transactions/all${query({
+      member_id: params.memberId,
+      type: params.type,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  )
+}
+
+/* ---------------- 促销 ---------------- */
+
+/** 查询当前门店促销列表 { enabled } */
+export function fetchPromotions(params = {}) {
+  return request(`/api/promotions${query({ enabled: params.enabled })}`)
+}
+/** 新建促销 */
+export function createPromotion(data) {
+  return request('/api/promotions', { method: 'POST', body: JSON.stringify(data) })
+}
+/** 更新促销 */
+export function updatePromotion(id, data) {
+  return request(`/api/promotions/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+/** 删除促销 */
+export function deletePromotion(id) {
+  return request(`/api/promotions/${id}`, { method: 'DELETE' })
+}
+
+/* ---------------- 库存 ---------------- */
+
+/** 分页查询当前门店库存 { keyword, categoryId, lowOnly, page, pageSize } */
+export function fetchInventory(params = {}) {
+  return request(
+    `/api/inventory${query({
+      keyword: params.keyword,
+      category_id: params.categoryId,
+      low_only: params.lowOnly,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  )
+}
+/** 库存预警清单 */
+export function fetchInventoryAlerts() {
+  return request('/api/inventory/alerts')
+}
+/** 采购入库 { productId, qty, costPrice } */
+export function inventoryInbound(data) {
+  return request('/api/inventory/inbound', {
+    method: 'POST',
+    body: JSON.stringify({ product_id: data.productId, qty: data.qty, cost_price: data.costPrice }),
+  })
+}
+/** 库存盘点 { productId, actual } */
+export function inventoryStocktake(data) {
+  return request('/api/inventory/stocktake', {
+    method: 'POST',
+    body: JSON.stringify({ product_id: data.productId, actual: data.actual }),
+  })
+}
+/** 库存报损 { productId, qty } */
+export function inventoryBreakage(data) {
+  return request('/api/inventory/breakage', {
+    method: 'POST',
+    body: JSON.stringify({ product_id: data.productId, qty: data.qty }),
+  })
+}
+/** 分页查询库存流水 { productId, type, page, pageSize } */
+export function fetchInventoryMovements(params = {}) {
+  return request(
+    `/api/inventory/movements${query({
+      product_id: params.productId,
+      type: params.type,
+      page: params.page,
+      page_size: params.pageSize,
+    })}`,
+  )
+}
+
+/* ---------------- 报表 ---------------- */
+
+/** 销售日报月报 { start, end, mode } */
+export function fetchDailyReport(params = {}) {
+  return request(`/api/reports/daily${query({ start: params.start, end: params.end, mode: params.mode })}`)
+}
+/** 商品销售排行 { start, end, limit } */
+export function fetchProductRank(params = {}) {
+  return request(`/api/reports/products${query({ start: params.start, end: params.end, limit: params.limit })}`)
+}
+/** 时段分析 { start, end } */
+export function fetchHourlyReport(params = {}) {
+  return request(`/api/reports/hourly${query({ start: params.start, end: params.end })}`)
+}
+/** 毛利分析 { start, end } */
+export function fetchProfitReport(params = {}) {
+  return request(`/api/reports/profit${query({ start: params.start, end: params.end })}`)
+}
+/** 会员分析 { start, end, limit } */
+export function fetchMemberReport(params = {}) {
+  return request(`/api/reports/members${query({ start: params.start, end: params.end, limit: params.limit })}`)
+}
+
+/* ---------------- 用户（本店员工管理，店长及以上） ---------------- */
+
+/** 分页查询本店可管理用户 { keyword, page, pageSize } */
+export function fetchUsers(params = {}) {
+  return request(`/api/users${query({ keyword: params.keyword, page: params.page, page_size: params.pageSize })}`)
+}
+/** 新增用户 { username, name, role, password } */
+export function createUser(data) {
+  return request('/api/users', {
+    method: 'POST',
+    body: JSON.stringify({
+      username: data.username,
+      name: data.name,
+      role: data.role,
+      password: data.password,
+    }),
+  })
+}
+/** 更新用户 { name, role, enabled, password } */
+export function updateUser(id, data) {
+  return request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(data) })
+}
+/** 重置密码：服务端生成随机临时密码一次性返回 */
+export function resetUserPassword(id) {
+  return request(`/api/users/${id}/reset-password`, { method: 'POST' })
 }
