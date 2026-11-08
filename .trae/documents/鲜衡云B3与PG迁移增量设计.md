@@ -1028,4 +1028,7 @@ graph LR
 
 ---
 
+> ✅ **2026-11-08 补充（弱口令专项）**：用户随后改口「处理弱口令」，R2 / R19 已完成，详见整改清单 9.4。PG baseline `pg0001` 需纳入 `users.must_change_password BOOLEAN NOT NULL DEFAULT false`，ETL 须一并搬运该列与已轮换的 `password_hash`；原「禁止执行 `rotate_weak_passwords.py --apply`」断言已失效，改为「不得再次批量轮换，除非单账号口令丢失」。
+>
+
 > **本文结束**。B3 部分（Part A）可直接作为任务 #2 的实施依据与任务 #3 的回归依据；PG 迁移部分（Part B）在附录 B 问题 1–3 确认前**不得开工**。
