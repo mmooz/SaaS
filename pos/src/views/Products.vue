@@ -108,8 +108,8 @@
     </div>
 
     <!-- 新增 / 编辑商品弹窗 -->
-    <el-dialog v-model="formVisible" :title="form.id ? '编辑商品' : '新增商品'" width="640px" destroy-on-close>
-      <el-form ref="formRef" :model="form" :rules="formRules" label-width="96px">
+    <el-dialog v-model="formVisible" :title="form.id ? '编辑商品' : '新增商品'" width="760px" destroy-on-close>
+      <el-form ref="formRef" :model="form" :rules="formRules" label-width="108px">
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="商品条码" prop="barcode">
