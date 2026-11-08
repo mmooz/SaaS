@@ -25,9 +25,10 @@ class RefundOut(BaseModel):
     amount: float
     # 退款原因
     reason: str | None
-    # 操作收银员用户 ID
+    # 操作收银员用户 ID（Q17 语义变化：恒为服务端令牌用户 ID，不再取客户端传值）
     cashier_id: SnowflakeId | None
-    # 店长授权人用户 ID
+    # 店长授权人用户 ID（Q17 弃用：字段保留以兼容前端，恒为 null；
+    # 拍板 1 不做「本人当班」判定与授权人，DB 列保留但 B3 不写入、不新增迁移）
     authorizer_id: SnowflakeId | None
     # 退款时间
     created_at: datetime

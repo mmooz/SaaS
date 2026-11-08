@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from app.models import Member, MemberTransaction, Order, RefundItem, RefundRecord
 from app.schemas.refund_create import RefundCreate
 from app.services.inventory_service import InventoryService
+from app.services.member_tx_store_service import resolve_store_id
+from app.services.order_status import OrderStatus
 
 
 class RefundService:
@@ -55,7 +57,12 @@ class RefundService:
 
     @staticmethod
     def _refund_stored_value(
-        db: Session, order: Order, amount: float, data: RefundCreate, tenant_id: int
+        db: Session,
+        order: Order,
+        amount: float,
+        data: RefundCreate,
+        tenant_id: int,
+        actor_id: int,
     ) -> None:
         """储值支付订单退款：把金额退回会员余额并写入资金流水。
 
@@ -64,6 +71,7 @@ class RefundService:
         :param amount: 退款金额
         :param data: 退款请求
         :param tenant_id: 所属租户 ID
+        :param actor_id: 服务端令牌用户 ID（Q17：流水 operator_id 主体可信）
         """
         if not order.member_id or amount <= 0:
             return
@@ -71,7 +79,16 @@ class RefundService:
             pay = json.loads(order.pay_details) if order.pay_details else {}
         except (TypeError, ValueError):
             return
-        # 仅纯储值支付才自动退回余额，混合支付需线下处理
+
+        # ---- Q20 / Q06 契约冻结：B3 只登记，不改逻辑（详见设计 A.3.2）----
+        # 现状：仅当 list(pay.keys()) == ["储值"]（纯储值支付）才自动退回余额，
+        # 混合支付不返储值、不写标记/流水，且判断依赖中文 key 的字面量与顺序。
+        # TODO(B4 / Q06 + Q20)：由 Q06 新增的结算接口在单事务内产出「支付方式枚举
+        #   + 金额」的结构化 pay_details 与同事务的 type=consume 扣款流水；退款改为
+        #   按各支付方式金额比例计算应退储值，并在返前校验原单确有对应 consume 流水
+        #   （无流水不返钱，堵「不扣先返」套利）。B3 提前改动会因①结构契约未定、
+        #   ②扣款流水不存在（当前 consumeMember 为独立 HTTP 且 order_no 后端未使用）、
+        #   ③R20 已临时下线在线储值支付无验证流量而整体返工，故本批冻结现状。
         if list(pay.keys()) != ["储值"]:
             return
         member = db.get(Member, order.member_id)
@@ -81,27 +98,32 @@ class RefundService:
         db.add(
             MemberTransaction(
                 tenant_id=tenant_id,
-                store_id=order.store_id,
+                # Q24：退款流水按订单号反查门店，统一走共享服务（拍板 2 不重算历史）
+                store_id=resolve_store_id(db, tenant_id, order.store_id, order.order_no),
                 member_id=member.id,
                 type="refund",
                 amount=amount,
                 points=0,
-                operator_id=data.cashier_id,
+                # Q17：取服务端令牌用户，不再取客户端 data.cashier_id
+                operator_id=actor_id,
             )
         )
 
     @staticmethod
-    def refund(db: Session, order: Order, data: RefundCreate, tenant_id: int) -> RefundRecord:
+    def refund(
+        db: Session, order: Order, data: RefundCreate, tenant_id: int, actor_id: int
+    ) -> RefundRecord:
         """执行退款：校验可退范围、生成退款单、回滚库存并返还储值。
 
         :param db: 数据库会话
         :param order: 原订单 ORM 对象
         :param data: 退款请求
         :param tenant_id: 所属租户 ID
+        :param actor_id: 服务端令牌用户 ID（Q17：退款单与流水的操作主体）
         :return: 新建的退款单
         :raises ValueError: 订单状态或退货明细不满足退款条件
         """
-        if order.status == "refunded":
+        if order.status == OrderStatus.REFUNDED:
             raise ValueError("订单已全额退款，不能重复退款")
 
         refunded_ids = RefundService.refunded_item_ids(db, order.id)
@@ -116,7 +138,7 @@ class RefundService:
             amount = remaining
             if amount <= 0:
                 raise ValueError("订单已无可退金额")
-            order.status = "refunded"
+            order.status = OrderStatus.REFUNDED
         else:
             # 单项退货：校验选中明细存在且未退过货
             if not data.item_ids:
@@ -130,7 +152,7 @@ class RefundService:
             amount = round(min(sum(item.amount for item in items), remaining), 2)
             if amount <= 0:
                 raise ValueError("退款金额无效")
-            order.status = "partially_refunded"
+            order.status = OrderStatus.PARTIALLY_REFUNDED
 
         record_kwargs = {
             "tenant_id": tenant_id,
@@ -140,8 +162,10 @@ class RefundService:
             "refund_type": data.refund_type,
             "amount": amount,
             "reason": data.reason,
-            "cashier_id": data.cashier_id or order.cashier_id,
-            "authorizer_id": data.authorizer_id,
+            # Q17：操作主体取令牌用户 ID，不再取客户端 cashier_id
+            "cashier_id": actor_id,
+            # Q17 / 拍板 1：不做授权人，字段保留（DB 列与 RefundOut）但恒为 null
+            "authorizer_id": None,
         }
         # 离线补传时保留收银端原始退款时间
         if data.created_at is not None:
@@ -163,7 +187,7 @@ class RefundService:
         db.add(record)
         # 库存回滚与储值返还
         InventoryService.restore_for_refund(db, order, items)
-        RefundService._refund_stored_value(db, order, amount, data, tenant_id)
+        RefundService._refund_stored_value(db, order, amount, data, tenant_id, actor_id)
         db.flush()
         return record
 

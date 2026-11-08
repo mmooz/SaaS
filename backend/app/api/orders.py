@@ -342,7 +342,9 @@ def refund_order(
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
-    _user: User = Depends(get_manager_user),
+    # 拍板 1（Q17）：仅 manager 及以上可退，守卫已存在且保留，不再新增角色守卫。
+    # 具名 user 供服务层与操作日志取可信主体（令牌用户 ID），拒绝客户端伪造。
+    user: User = Depends(get_manager_user),
 ):
     """订单退款/退货：整单退款或按明细退货，自动回滚库存与储值余额。"""
     # Q03：补 tenant_id 过滤，确保原订单确属当前租户+门店上下文
@@ -370,15 +372,17 @@ def refund_order(
                 )
             return existing
     try:
-        record = RefundService.refund(db, order, data, tenant_id=tenant_id)
+        # Q17：操作主体一律取令牌用户 ID 并显式传入服务层，
+        # 请求体 cashier_id（已弃用）与 authorizer_id（已移除）不再参与任何记账。
+        record = RefundService.refund(db, order, data, tenant_id=tenant_id, actor_id=user.id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # 记录退款操作日志
+    # 记录退款操作日志（已存在的日志不重复新增；actor 改取令牌用户，主体可信）
     OperationLogService.record(
         db,
         "退款",
         f"订单 {order_no} 退款 {record.amount} 元（{'整单' if data.refund_type == 'full' else '单项'}）",
-        data.cashier_id or order.cashier_id,
+        user.id,
         tenant_id=tenant_id,
     )
     db.commit()
