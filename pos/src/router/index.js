@@ -33,7 +33,7 @@ const routes = [
               return null
             }
           })()
-          return MANAGER_ROLES.includes(c?.role) ? '/manage/dashboard' : '/orders'
+          return MANAGER_ROLES.includes(c?.role) ? '/manage/dashboard' : '/manage/orders'
         },
       },
       { path: 'dashboard', name: 'ManageDashboard', component: () => import('../views/Dashboard.vue'), meta: { title: '首页仪表盘', requireManager: true } },
@@ -43,13 +43,12 @@ const routes = [
       { path: 'promotions', name: 'ManagePromotions', component: () => import('../views/Promotions.vue'), meta: { title: '促销管理', requireManager: true } },
       { path: 'inventory', name: 'ManageInventory', component: () => import('../views/Inventory.vue'), meta: { title: '库存管理', requireManager: true } },
       { path: 'reports', name: 'ManageReports', component: () => import('../views/Reports.vue'), meta: { title: '报表中心', requireManager: true } },
+      // 业务办理类：收银员亦可进入，故不设 requireManager
+      { path: 'orders', name: 'Orders', component: () => import('../views/Orders.vue'), meta: { title: '订单查询' } },
+      { path: 'shift', name: 'Shift', component: () => import('../views/Shift.vue'), meta: { title: '交接班' } },
+      // 系统设置：本机收银终端配置，所有登录收银员可访问
+      { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue'), meta: { title: '系统设置' } },
     ],
-  },
-  {
-    path: '/shift',
-    name: 'Shift',
-    component: () => import('../views/Shift.vue'),
-    meta: { title: '交接班' },
   },
   {
     path: '/refund',
@@ -58,22 +57,10 @@ const routes = [
     meta: { title: '退款退货' },
   },
   {
-    path: '/orders',
-    name: 'Orders',
-    component: () => import('../views/Orders.vue'),
-    meta: { title: '订单查询' },
-  },
-  {
     path: '/reprint',
     name: 'Reprint',
     component: () => import('../views/Reprint.vue'),
     meta: { title: '补打' },
-  },
-  {
-    path: '/settings',
-    name: 'Settings',
-    component: () => import('../views/Settings.vue'),
-    meta: { title: '系统设置' },
   },
 ]
 

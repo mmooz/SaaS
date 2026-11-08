@@ -31,12 +31,12 @@
         </el-menu-item>
         <el-sub-menu index="g-biz">
           <template #title><el-icon><Tickets /></el-icon><span>业务办理</span></template>
-          <el-menu-item index="/orders"><el-icon><Tickets /></el-icon>订单查询</el-menu-item>
-          <el-menu-item index="/shift"><el-icon><Clock /></el-icon>交接班</el-menu-item>
+          <el-menu-item index="/manage/orders"><el-icon><Tickets /></el-icon>订单查询</el-menu-item>
+          <el-menu-item index="/manage/shift"><el-icon><Clock /></el-icon>交接班</el-menu-item>
         </el-sub-menu>
         <el-sub-menu index="g-sys">
           <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
-          <el-menu-item index="/settings"><el-icon><Setting /></el-icon>系统设置</el-menu-item>
+          <el-menu-item index="/manage/settings"><el-icon><Setting /></el-icon>系统设置</el-menu-item>
           <el-menu-item index="/"><el-icon><ArrowLeft /></el-icon>返回收银台</el-menu-item>
         </el-sub-menu>
       </el-menu>
@@ -108,10 +108,10 @@ const openGroups = computed(() => {
   if (['/manage/products', '/manage/categories', '/manage/members', '/manage/promotions', '/manage/inventory'].includes(p)) {
     return ['g-data']
   }
-  if (['/orders', '/shift'].includes(p)) {
+  if (['/manage/orders', '/manage/shift'].includes(p)) {
     return ['g-biz']
   }
-  if (['/settings', '/'].includes(p)) {
+  if (['/manage/settings', '/'].includes(p)) {
     return ['g-sys']
   }
   return []

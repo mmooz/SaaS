@@ -21,7 +21,7 @@
         <el-button size="large" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;工作台</el-button>
         <el-divider direction="vertical" />
         <!-- 系统：交接班、退出 -->
-        <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
+        <el-button size="large" @click="$router.push('/manage/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
         <el-button size="large" @click="logout"><el-icon><SwitchButton /></el-icon>&nbsp;退出</el-button>
       </div>
     </header>
