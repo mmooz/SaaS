@@ -17,8 +17,8 @@
         <!-- Q17：仅店长及以上可见退款入口，收银员无入口 -->
         <el-button v-if="isManager" size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
         <el-divider direction="vertical" />
-        <!-- 工作台入口：所有店员可进入（数据页仍按角色门禁），店员落地页为订单查询 -->
-        <el-button size="large" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;工作台</el-button>
+        <!-- 管理后台入口：所有店员可进入（数据页仍按角色门禁），普通按钮避免误导为激活态 -->
+        <el-button size="large" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;管理</el-button>
         <el-divider direction="vertical" />
         <!-- 系统：交接班、退出 -->
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
