@@ -21,17 +21,34 @@ class TokenService:
         # 令牌有效期（秒）
         self.expire_seconds = expire_hours * 3600
 
-    def issue(self, user_id: int, tenant_id: int) -> str:
-        """为用户签发令牌，载荷携带用户 ID 与所属租户 ID。
+    @staticmethod
+    def password_version(password_hash: str | None) -> str:
+        """由密码哈希派生短版本号（哈希变化 = 版本变化）。
+
+        R19：把该值写进令牌载荷并在解析时与库中当前哈希比对，使「修改密码 /
+        轮换弱口令」后所有此前签发的令牌立即失效。无需新增用户表列或 token
+        黑名单，无状态令牌保持无状态。
+
+        :param password_hash: 库中保存的密码哈希
+        :return: 16 位十六进制版本串；空哈希返回空串
+        """
+        if not password_hash:
+            return ""
+        return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:16]
+
+    def issue(self, user_id: int, tenant_id: int, password_hash: str = "") -> str:
+        """为用户签发令牌，载荷携带用户 ID、租户 ID 与密码版本。
 
         :param user_id: 用户 ID
         :param tenant_id: 所属租户 ID
+        :param password_hash: 当前密码哈希（R19：用于绑定密码版本）
         :return: 令牌字符串（载荷.签名）
         """
         payload = {
             "uid": user_id,
             "tid": tenant_id,
             "exp": int(time.time()) + self.expire_seconds,
+            "pv": self.password_version(password_hash),
         }
         body = self._encode(json.dumps(payload, separators=(",", ":")))
         return f"{body}.{self._sign(body)}"
@@ -40,7 +57,8 @@ class TokenService:
         """校验令牌并取出用户 ID 与租户 ID。
 
         :param token: 待校验令牌
-        :return: 校验通过返回 {"user_id":..., "tenant_id":...}；签名错误、格式错误或已过期返回 None
+        :return: 校验通过返回 {"user_id", "tenant_id", "password_version"}；
+            签名错误、格式错误或已过期返回 None
         """
         try:
             body, signature = token.split(".")
@@ -59,7 +77,14 @@ class TokenService:
         tenant_id = payload.get("tid")
         if not isinstance(user_id, int) or not isinstance(tenant_id, int):
             return None
-        return {"user_id": user_id, "tenant_id": tenant_id}
+        version = payload.get("pv", "")
+        if not isinstance(version, str):
+            return None
+        return {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "password_version": version,
+        }
 
     def _sign(self, body: str) -> str:
         """对载荷做 HMAC-SHA256 签名。

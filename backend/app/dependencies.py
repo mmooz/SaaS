@@ -21,17 +21,41 @@ from app.database import get_db
 from app.models import Store, Tenant, User, UserStore
 
 
-def get_current_user(
+def get_authenticated_user(
     db: Session = Depends(get_db),
     authorization: str | None = Header(None),
 ) -> User:
-    """当前登录用户依赖（按令牌查库，校验账号存在且启用）。
+    """仅解析登录态、不校验待改密标记的底层依赖。
+
+    R19：待改密账号必须能凭借「临时口令登录换到的令牌」调用
+    ``POST /api/auth/change-password``，因此该接口使用本依赖；
+    其它任何业务接口都不应使用本依赖。
 
     :param db: 数据库会话
     :param authorization: Authorization 请求头
     :return: 登录用户 ORM 对象
     """
     return _current_user(db, authorization)
+
+
+def get_current_user(user: User = Depends(get_authenticated_user)) -> User:
+    """当前登录用户依赖：登录态校验 + R19 强制首次改密守卫。
+
+    所有业务接口（角色层级、租户上下文、门店上下文）最终都经由本依赖，
+    因此 ``must_change_password=True`` 的账号在本人改密前无法读写任何
+    业务数据。守卫在服务端，不依赖前端是否配合跳转。
+
+    :param user: 已解析的登录用户
+    :return: 无需改密的登录用户 ORM 对象
+    :raises HTTPException: 账号仍在使用临时口令（403）
+    """
+    if user.must_change_password:
+        raise HTTPException(
+            status_code=403,
+            detail="账号当前使用临时口令，请先修改密码后再操作",
+            headers={"X-Password-Change-Required": "1"},
+        )
+    return user
 
 
 def get_tenant_id(

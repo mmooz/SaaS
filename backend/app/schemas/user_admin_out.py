@@ -24,3 +24,5 @@ class UserAdminOut(BaseModel):
     enabled: bool
     # 创建时间
     created_at: datetime
+    # R19：是否等待本人首次改密（后台用户列表可提示管理员）
+    must_change_password: bool = False

@@ -19,3 +19,6 @@ class LoginResponse(BaseModel):
     user: UserOut
     # 用户可访问的门店列表（前端用于门店切换）
     stores: list[StoreOut]
+    # R19：账号使用临时口令，前端须先进入改密流程再放行主界面。
+    # 可选带默认值，旧客户端忽略该字段不影响既有登录逻辑。
+    must_change_password: bool = False
