@@ -938,6 +938,9 @@ onBeforeUnmount(() => {
   flex: 1;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
+  /* 商品较少时不要让 grid 行拉伸到整列高度（否则卡片变成一大块空白） */
+  align-content: start;
+  grid-auto-rows: min-content;
   gap: 10px;
   overflow: auto;
   padding-bottom: 8px;
@@ -952,6 +955,11 @@ onBeforeUnmount(() => {
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--neutral-200);
   text-align: left;
+  /* button 内容默认垂直居中，显式改为顶部对齐，避免卡片被拉高后文字悬在中间 */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
   transition: transform 0.1s;
 }
 .product-cell:hover {
