@@ -15,17 +15,6 @@
         router
         class="side-menu"
       >
-        <!-- 返回收银台：固定在最顶部，所有角色始终可见 -->
-        <el-menu-item index="/" class="back-item">
-          <el-icon><ArrowLeft /></el-icon><span>返回收银台</span>
-        </el-menu-item>
-
-        <!-- 日常业务：所有店员可用的常驻一级入口（原埋在子菜单中不合理） -->
-        <el-menu-item index="/orders"><el-icon><Tickets /></el-icon><span>订单查询</span></el-menu-item>
-        <el-menu-item index="/shift"><el-icon><Clock /></el-icon><span>交接班</span></el-menu-item>
-        <el-menu-item index="/settings"><el-icon><Setting /></el-icon><span>系统设置</span></el-menu-item>
-
-        <!-- 以下仅店长及以上可见 -->
         <el-menu-item v-if="isManager" index="/manage">
           <el-icon><Odometer /></el-icon><span>首页仪表盘</span>
         </el-menu-item>
@@ -40,6 +29,16 @@
         <el-menu-item v-if="isManager" index="/manage/reports">
           <el-icon><DataAnalysis /></el-icon><span>报表中心</span>
         </el-menu-item>
+        <el-sub-menu index="g-biz">
+          <template #title><el-icon><Tickets /></el-icon><span>业务办理</span></template>
+          <el-menu-item index="/orders"><el-icon><Tickets /></el-icon>订单查询</el-menu-item>
+          <el-menu-item index="/shift"><el-icon><Clock /></el-icon>交接班</el-menu-item>
+        </el-sub-menu>
+        <el-sub-menu index="g-sys">
+          <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
+          <el-menu-item index="/settings"><el-icon><Setting /></el-icon>系统设置</el-menu-item>
+          <el-menu-item index="/"><el-icon><ArrowLeft /></el-icon>返回收银台</el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
@@ -103,11 +102,17 @@ const isManager = computed(() => ['admin', 'manager', 'super'].includes(cashier.
 // 当前激活的菜单项（按路由路径匹配）
 const activeMenu = computed(() => route.path)
 
-// 当前路由所属分组：加载时自动展开对应子菜单（仅店长可见的基础数据分组）
+// 当前路由所属分组：加载时自动展开对应子菜单，避免进入子页后菜单折叠
 const openGroups = computed(() => {
   const p = route.path
   if (['/manage/products', '/manage/categories', '/manage/members', '/manage/promotions', '/manage/inventory'].includes(p)) {
     return ['g-data']
+  }
+  if (['/orders', '/shift'].includes(p)) {
+    return ['g-biz']
+  }
+  if (['/settings', '/'].includes(p)) {
+    return ['g-sys']
   }
   return []
 })
@@ -176,16 +181,6 @@ const logout = () => {
   border-right: none;
   flex: 1;
   padding-top: 8px;
-}
-/* 返回收银台：置顶并作为独立强调项，与日常业务入口区分 */
-.side-menu .back-item {
-  margin: 0 8px 8px;
-  border-radius: 8px;
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-}
-.side-menu .back-item:hover {
-  background: var(--el-color-primary-light-8);
 }
 .manage-header {
   display: flex;
