@@ -17,9 +17,12 @@
     <!-- 右侧登录表单区 -->
     <div class="login-panel">
       <div class="login-card">
-        <h2>登录后台管理</h2>
-        <p class="login-tip">请使用店长或管理员账号登录</p>
-        <el-form :model="form" size="large" @keyup.enter="handleLogin">
+        <h2>{{ needChange ? '首次登录 · 设置新密码' : '登录后台管理' }}</h2>
+        <p class="login-tip" v-if="!needChange">请使用店长或管理员账号登录</p>
+        <p class="login-tip" v-else>
+          当前账号使用临时口令，请先设置新密码（至少 8 位，不得与原密码相同）
+        </p>
+        <el-form v-if="!needChange" :model="form" size="large" @keyup.enter="handleLogin">
           <el-form-item>
             <el-input v-model="form.username" placeholder="用户名 / 手机号" clearable>
               <template #prefix><el-icon><User /></el-icon></template>
@@ -34,6 +37,24 @@
             登 录
           </el-button>
         </el-form>
+        <el-form v-else :model="changeForm" size="large" @keyup.enter="handleChangePassword">
+          <el-form-item>
+            <el-input v-model="changeForm.newPassword" type="password" placeholder="新密码（至少 8 位）" show-password>
+              <template #prefix><el-icon><Lock /></el-icon></template>
+            </el-input>
+          </el-form-item>
+          <el-form-item>
+            <el-input v-model="changeForm.confirmPassword" type="password" placeholder="确认新密码" show-password>
+              <template #prefix><el-icon><Lock /></el-icon></template>
+            </el-input>
+          </el-form-item>
+          <el-button type="primary" class="login-btn" :loading="loading" @click="handleChangePassword">
+            设置新密码并登录
+          </el-button>
+          <el-button class="login-btn back-btn" :disabled="loading" @click="cancelChange">
+            返回登录
+          </el-button>
+        </el-form>
       </div>
       <div class="login-footer">© 2026 鲜衡云 · 电子秤收银系统</div>
     </div>
@@ -45,12 +66,22 @@ import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { login, setAdminToken, setStores, setCurrentStore, setUserInfo } from '../api'
+import {
+  login,
+  changePassword,
+  setAdminToken,
+  clearAdminToken,
+  setStores,
+  setCurrentStore,
+  setUserInfo,
+} from '../api'
 
 const router = useRouter()
 
 // 登录中状态（防止重复提交）
 const loading = ref(false)
+// R19：服务端判定当前账号使用临时口令时，切换到强制改密视图
+const needChange = ref(false)
 
 // 登录表单数据
 const form = reactive({
@@ -58,8 +89,34 @@ const form = reactive({
   password: '',
 })
 
+// 强制改密表单数据
+const changeForm = reactive({
+  newPassword: '',
+  confirmPassword: '',
+})
+
 /**
- * 登录：调用后端认证接口，校验角色后保存令牌并跳转仪表盘
+ * 保存登录态并进入主界面（登录成功与改密成功后共用）
+ * @param {object} res 登录响应
+ * @returns {void}
+ */
+const finishLogin = (res) => {
+  setAdminToken(res.access_token)
+  // 保存当前用户信息，供菜单与权限判断使用
+  setUserInfo(res.user)
+  // 保存可访问门店列表；超级管理员无门店，不设置当前门店
+  const stores = res.stores || []
+  setStores(stores)
+  if (stores.length > 0) {
+    setCurrentStore(stores[0].id)
+  }
+  ElMessage.success(`欢迎回来，${res.user.name}`)
+  // 超级管理员进入租户管理，其他角色进入仪表盘
+  router.push(res.user.role === 'super' ? '/tenants' : '/dashboard')
+}
+
+/**
+ * 登录：校验角色；若服务端要求改密则先进入改密视图，不落地完整登录态
  * @returns {Promise<void>}
  */
 const handleLogin = async () => {
@@ -75,23 +132,66 @@ const handleLogin = async () => {
       ElMessage.warning('该账号无后台管理权限')
       return
     }
-    setAdminToken(res.access_token)
-    // 保存当前用户信息，供菜单与权限判断使用
-    setUserInfo(res.user)
-    // 保存可访问门店列表；超级管理员无门店，不设置当前门店
-    const stores = res.stores || []
-    setStores(stores)
-    if (stores.length > 0) {
-      setCurrentStore(stores[0].id)
+    if (res.must_change_password) {
+      // 仅暂存令牌供改密接口携带；此时不保存用户/门店信息、不进入主界面
+      setAdminToken(res.access_token)
+      needChange.value = true
+      return
     }
-    ElMessage.success(`欢迎回来，${res.user.name}`)
-    // 超级管理员进入租户管理，其他角色进入仪表盘
-    router.push(res.user.role === 'super' ? '/tenants' : '/dashboard')
+    finishLogin(res)
   } catch (err) {
     ElMessage.error(`登录失败：${err.message}`)
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * R19：用临时口令换绑新密码。改密成功后旧令牌立即失效，须用新密码重新登录。
+ * @returns {Promise<void>}
+ */
+const handleChangePassword = async () => {
+  if (!changeForm.newPassword || changeForm.newPassword.length < 8) {
+    ElMessage.warning('新密码至少需要 8 位')
+    return
+  }
+  if (changeForm.newPassword !== changeForm.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+  loading.value = true
+  try {
+    await changePassword(form.password, changeForm.newPassword)
+    // 改密已生效，后续任何请求都必须使用新密码签发的令牌
+    let res
+    try {
+      res = await login(form.username, changeForm.newPassword)
+    } catch (err) {
+      ElMessage.success('密码已修改，请用新密码重新登录')
+      cancelChange()
+      return
+    }
+    needChange.value = false
+    form.password = ''
+    changeForm.newPassword = ''
+    changeForm.confirmPassword = ''
+    finishLogin(res)
+  } catch (err) {
+    ElMessage.error(`修改密码失败：${err.message}`)
+  } finally {
+    loading.value = false
+  }
+}
+
+/**
+ * 放弃本次改密：清除暂存的临时令牌，回到登录表单
+ * @returns {void}
+ */
+const cancelChange = () => {
+  clearAdminToken()
+  needChange.value = false
+  changeForm.newPassword = ''
+  changeForm.confirmPassword = ''
 }
 </script>
 
@@ -201,5 +301,8 @@ const handleLogin = async () => {
   bottom: 24px;
   color: var(--neutral-400);
   font-size: 12px;
+}
+.back-btn {
+  margin: 12px 0 0;
 }
 </style>

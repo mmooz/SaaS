@@ -127,6 +127,21 @@ export function login(username, password) {
 }
 
 /**
+ * 修改本人登录密码（R19 强制首次改密）
+ * 待改密账号的令牌只能调用本接口；改密成功后服务端会使所有旧令牌失效，
+ * 调用方须用新密码重新登录再进入主界面。
+ * @param {string} oldPassword 当前密码（弱口令或临时口令均可）
+ * @param {string} newPassword 新密码（≥8 位、非弱口令、不得与原密码相同）
+ * @returns {Promise<{must_change_password: boolean}>} 改密结果
+ */
+export function changePassword(oldPassword, newPassword) {
+  return request('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  })
+}
+
+/**
  * 发起 JSON 请求并解析响应
  * @param {string} path 接口路径
  * @param {object} options fetch 选项
