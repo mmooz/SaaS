@@ -154,6 +154,9 @@ class TenantService:
                 name=(admin_name or username).strip(),
                 role="admin",
                 enabled=True,
+                # R19：建租户时填写的初始管理员密码由平台方代设，
+                # 该租户管理员首次登录须改为自己掌握的密码
+                must_change_password=True,
             )
             db.add(user)
             db.flush()

@@ -92,6 +92,8 @@ def create_user(
         role=data.role,
         enabled=True,
         password_hash=PasswordHasher.hash(data.password),
+        # R19：初始密码由管理员设置，本人首次登录须改为自己掌握的密码
+        must_change_password=True,
     )
     db.add(user)
     db.flush()
@@ -120,6 +122,8 @@ def update_user(
         setattr(user, key, value)
     if password:
         user.password_hash = PasswordHasher.hash(password)
+        # R19：管理员在后台设置的密码同样视为临时口令
+        user.must_change_password = True
     OperationLogService.record(
         db, "修改用户", f"更新用户 {user.username} 的资料", tenant_id=tenant_id
     )
@@ -143,6 +147,8 @@ def reset_password(
     user = _get_user(db, user_id, tenant_id)
     temporary_password = generate_temporary_password()
     user.password_hash = PasswordHasher.hash(temporary_password)
+    # R19：随机临时口令只用于首次登录换绑，服务端强制本人立即改密
+    user.must_change_password = True
     OperationLogService.record(
         db,
         "重置密码",
