@@ -14,7 +14,13 @@ from app.schemas.product_create import ProductCreate
 from app.schemas.product_out import ProductOut
 from app.schemas.product_query import ProductQuery
 from app.schemas.product_update import ProductUpdate
-from app.services.excel_service import excel_service
+from app.services.excel_service import (
+    MAX_IMPORT_FILE_BYTES,
+    deleted_barcode,
+    excel_service,
+    release_deleted_barcode,
+)
+from app.services.inventory_service import round_amount, round_stock
 from app.services.operation_log_service import OperationLogService
 from app.services.product_stock_service import ProductStockService
 
@@ -36,7 +42,7 @@ def fill_store_stock(
     stocks = ProductStockService.get_map(db, [p.id for p in products], store_id)
     for out, product in zip(items, products):
         row = stocks.get(product.id)
-        out.stock = round(row.stock or 0, 3) if row else 0
+        out.stock = round_stock(row.stock) if row else 0
         out.safety_stock = (row.safety_stock or 0) if row else 0
     return items
 
@@ -140,7 +146,7 @@ def batch_adjust_price(
             new_price = product.price * (1 + data.value / 100)
         else:
             new_price = product.price + data.value
-        new_price = round(max(0, new_price), 2)
+        new_price = round_amount(max(0, new_price))
         if new_price != product.price:
             db.add(
                 ProductPriceHistory(
@@ -168,11 +174,18 @@ async def import_products(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """上传 Excel 批量导入/更新商品。"""
+    """上传 Excel 批量导入/更新商品（Q23：限制上传大小，超限返回 413）。"""
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".xlsm")):
         raise HTTPException(status_code=422, detail="请上传 .xlsx 格式的 Excel 文件")
-    content = await file.read()
-    result = excel_service.import_products(db, content, tenant_id, store_id)
+    # Q23：最多读取「上限 + 1」字节即可判定超限，避免整份大文件进入内存与事务
+    content = await file.read(MAX_IMPORT_FILE_BYTES + 1)
+    if len(content) > MAX_IMPORT_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="导入文件超过系统允许的大小上限，请拆分后重试")
+    try:
+        result = excel_service.import_products(db, content, tenant_id, store_id)
+    except ValueError as exc:
+        # 服务层整文件级校验（大小防御性复核、表头等）转成明确业务错误，不暴露为 500
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return result
 
 
@@ -185,13 +198,18 @@ def create_product(
     _user: User = Depends(get_manager_user),
 ):
     """新增商品（同租户条码唯一，库存写入当前门店）。"""
+    # Q18：查重只针对未删除商品；软删行条码已被改写释放，不再占位
     exists = db.scalar(
         select(Product).where(
-            Product.barcode == data.barcode, Product.tenant_id == tenant_id
+            Product.barcode == data.barcode,
+            Product.tenant_id == tenant_id,
+            Product.deleted.is_(False),
         )
     )
     if exists:
         raise HTTPException(status_code=409, detail="条码已存在")
+    # Q18：兼容 B3 之前遗留的软删行（当时只打标记未改写条码），先释放占用
+    release_deleted_barcode(db, tenant_id, data.barcode)
     # 库存字段不落在商品档案上，单独写入当前门店库存表
     product = Product(
         **data.model_dump(exclude={"store_id", "stock", "safety_stock"}),
@@ -256,17 +274,20 @@ def update_product(
     )
     if not product:
         raise HTTPException(status_code=404, detail="商品不存在")
-    # 条码唯一性校验（同租户范围内）
+    # 条码唯一性校验（同租户范围内，Q18：排除已软删商品）
     if data.barcode:
         dup = db.scalar(
             select(Product).where(
                 Product.barcode == data.barcode,
                 Product.id != product_id,
                 Product.tenant_id == tenant_id,
+                Product.deleted.is_(False),
             )
         )
         if dup:
             raise HTTPException(status_code=409, detail="条码已被其他商品使用")
+        # Q18：释放 B3 之前遗留软删行占用的同值条码，避免写入触发唯一键冲突
+        release_deleted_barcode(db, tenant_id, data.barcode)
     # 记录价格变更历史
     old_price = product.price
     payload = data.model_dump(exclude_unset=True)
@@ -316,6 +337,10 @@ def delete_product(
     # 标记删除并停用，避免收银端继续售卖
     product.deleted = True
     product.enabled = False
+    # Q18：租户内条码是物理唯一索引，软删行仍会占位导致原条码永久无法复用。
+    # 改写为 D{id}（雪花 ID ≤19 位 + 1 位前缀 = 20 ≤ String(32)）释放占用，
+    # 不需要 DDL / 部分唯一索引；PG baseline 改部分唯一索引后可移除该过渡逻辑。
+    product.barcode = deleted_barcode(product.id)
     db.commit()
     OperationLogService.record(
         db, "删除商品", f"删除商品 {name}（{barcode}）", tenant_id=tenant_id
