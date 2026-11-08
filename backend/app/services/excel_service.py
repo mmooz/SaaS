@@ -296,11 +296,11 @@ class ExcelService:
         return product, created
 
     def export_products(self, db: Session, tenant_id: int, store_id: int) -> BytesIO:
-        """导出本租户全部商品为 Excel（库存取当前门店），返回字节流。
+        """导出当前门店全部商品为 Excel（库存取当前门店），返回字节流。
 
         :param db: 数据库会话
         :param tenant_id: 所属租户 ID
-        :param store_id: 当前门店 ID（用于取门店库存）
+        :param store_id: 当前门店 ID（用于过滤商品与取门店库存）
         :return: Excel 字节流
         """
         wb = Workbook()
@@ -313,7 +313,11 @@ class ExcelService:
 
         products = db.scalars(
             select(Product)
-            .where(Product.tenant_id == tenant_id, Product.deleted.is_(False))
+            .where(
+                Product.tenant_id == tenant_id,
+                Product.store_id == store_id,
+                Product.deleted.is_(False),
+            )
             .order_by(Product.category_id, Product.id)
         ).all()
         stocks = ProductStockService.get_map(db, [p.id for p in products], store_id)
@@ -373,13 +377,13 @@ class ExcelService:
         tenant_id: int,
         store_id: int,
     ) -> int | None:
-        """按名称解析分类（支持 一级/二级 路径），不存在则自动创建（租户级共享）。
+        """按名称解析分类（支持 一级/二级 路径），不存在则自动创建（归属当前门店）。
 
         :param db: 数据库会话
         :param category_name: 分类名称路径
         :param category_cache: 分类缓存
         :param tenant_id: 所属租户 ID
-        :param store_id: 创建分类时记录的归属门店 ID
+        :param store_id: 当前门店 ID（分类归属门店）
         :return: 分类 ID
         """
         if not category_name:
@@ -390,7 +394,7 @@ class ExcelService:
         if not parts:
             return None
 
-        # 逐级查找或创建分类
+        # 逐级查找或创建分类（仅当前门店，避免导入时串到其它门店的分类）
         parent_id = None
         for part in parts:
             key = f"{parent_id}:{part}"
@@ -402,6 +406,7 @@ class ExcelService:
                     Category.name == part,
                     Category.parent_id == parent_id,
                     Category.tenant_id == tenant_id,
+                    Category.store_id == store_id,
                 )
             )
             if category is None:

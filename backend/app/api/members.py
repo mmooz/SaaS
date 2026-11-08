@@ -83,9 +83,10 @@ def list_members(
     page_size: int = 20,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
 ):
-    """分页查询会员：可按手机号或姓名模糊搜索（租户级共享，各门店同一套会员库）。"""
-    stmt = select(Member).where(Member.tenant_id == tenant_id)
+    """分页查询会员：可按手机号或姓名模糊搜索，仅返回当前门店建档的会员。"""
+    stmt = select(Member).where(Member.tenant_id == tenant_id, Member.store_id == store_id)
     if keyword:
         like = f"%{keyword.strip()}%"
         stmt = stmt.where(or_(Member.mobile.like(like), Member.name.like(like)))

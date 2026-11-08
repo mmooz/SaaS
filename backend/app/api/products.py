@@ -70,9 +70,14 @@ def list_products(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """分页查询商品列表（租户级共享，库存取当前门店，已删除商品不返回）。"""
+    """分页查询商品列表（仅当前门店，库存取当前门店，已删除商品不返回）。"""
     base = apply_filters(
-        select(Product).where(Product.tenant_id == tenant_id, Product.deleted.is_(False)), query
+        select(Product).where(
+            Product.tenant_id == tenant_id,
+            Product.store_id == store_id,
+            Product.deleted.is_(False),
+        ),
+        query,
     )
     total = db.scalar(select(func.count()).select_from(base.subquery()))
     stmt = (
@@ -124,8 +129,12 @@ def batch_adjust_price(
     _user: User = Depends(get_manager_user),
 ):
     """批量改价：按分类/商品范围 + 比例/固定值调整，并记录价格历史。"""
-    # 确定改价范围（租户级共享商品，已删除商品不参与改价）
-    stmt = select(Product).where(Product.tenant_id == tenant_id, Product.deleted.is_(False))
+    # 确定改价范围（仅当前门店商品，已删除商品不参与改价）
+    stmt = select(Product).where(
+        Product.tenant_id == tenant_id,
+        Product.store_id == store_id,
+        Product.deleted.is_(False),
+    )
     if data.mode == "category":
         if data.category_id is None:
             raise HTTPException(status_code=422, detail="按分类改价需提供分类 ID")
@@ -244,10 +253,13 @@ def get_product(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """获取商品详情（租户级共享，库存取当前门店，已删除商品视为不存在）。"""
+    """获取商品详情（仅当前门店，库存取当前门店，已删除商品视为不存在）。"""
     product = db.scalar(
         select(Product).where(
-            Product.id == product_id, Product.tenant_id == tenant_id, Product.deleted.is_(False)
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+            Product.store_id == store_id,
+            Product.deleted.is_(False),
         )
     )
     if not product:
@@ -266,10 +278,13 @@ def update_product(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """更新商品（租户级共享，仅更新传入字段，已删除商品不可编辑）。"""
+    """更新商品（仅当前门店，仅更新传入字段，已删除商品不可编辑）。"""
     product = db.scalar(
         select(Product).where(
-            Product.id == product_id, Product.tenant_id == tenant_id, Product.deleted.is_(False)
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+            Product.store_id == store_id,
+            Product.deleted.is_(False),
         )
     )
     if not product:
@@ -324,10 +339,13 @@ def delete_product(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """删除商品（租户级共享，软删除：仅打标记并停用，保留数据用于历史追溯）。"""
+    """删除商品（仅当前门店，软删除：仅打标记并停用，保留数据用于历史追溯）。"""
     product = db.scalar(
         select(Product).where(
-            Product.id == product_id, Product.tenant_id == tenant_id, Product.deleted.is_(False)
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+            Product.store_id == store_id,
+            Product.deleted.is_(False),
         )
     )
     if not product:

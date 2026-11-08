@@ -47,12 +47,14 @@ def build_tree(categories: list[Category]) -> list[CategoryOut]:
 
 @router.get("/tree", response_model=list[CategoryOut])
 def get_category_tree(
-    db: Session = Depends(get_db), tenant_id: int = Depends(get_tenant_id)
+    db: Session = Depends(get_db),
+    tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
 ):
-    """获取本租户全部分类的树形结构（各门店共用一套分类）。"""
+    """获取当前门店的分类树形结构（分类归属门店，仅返回当前门店的分类）。"""
     categories = db.scalars(
         select(Category)
-        .where(Category.tenant_id == tenant_id)
+        .where(Category.tenant_id == tenant_id, Category.store_id == store_id)
         .order_by(Category.sort, Category.id)
     ).all()
     return build_tree(list(categories))
@@ -66,12 +68,14 @@ def create_category(
     store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """新增分类（租户级共享，记录创建门店用于追溯）。"""
-    # 校验上级分类存在且属于当前租户
+    """新增分类（归属当前门店，记录创建门店用于追溯）。"""
+    # 校验上级分类存在且属于当前租户与门店
     if data.parent_id:
         parent = db.scalar(
             select(Category).where(
-                Category.id == data.parent_id, Category.tenant_id == tenant_id
+                Category.id == data.parent_id,
+                Category.tenant_id == tenant_id,
+                Category.store_id == store_id,
             )
         )
         if not parent:
@@ -93,11 +97,16 @@ def update_category(
     data: CategoryUpdate,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """更新分类（租户级共享，仅更新传入字段）。"""
+    """更新分类（归属当前门店，仅更新传入字段）。"""
     category = db.scalar(
-        select(Category).where(Category.id == category_id, Category.tenant_id == tenant_id)
+        select(Category).where(
+            Category.id == category_id,
+            Category.tenant_id == tenant_id,
+            Category.store_id == store_id,
+        )
     )
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
@@ -113,17 +122,24 @@ def delete_category(
     category_id: int,
     db: Session = Depends(get_db),
     tenant_id: int = Depends(get_tenant_id),
+    store_id: int = Depends(get_store_id),
     _user: User = Depends(get_manager_user),
 ):
-    """删除分类（租户级共享，存在子分类或商品时禁止删除）。"""
+    """删除分类（归属当前门店，存在子分类或商品时禁止删除）。"""
     category = db.scalar(
-        select(Category).where(Category.id == category_id, Category.tenant_id == tenant_id)
+        select(Category).where(
+            Category.id == category_id,
+            Category.tenant_id == tenant_id,
+            Category.store_id == store_id,
+        )
     )
     if not category:
         raise HTTPException(status_code=404, detail="分类不存在")
     child_count = db.scalar(
         select(Category.id).where(
-            Category.parent_id == category_id, Category.tenant_id == tenant_id
+            Category.parent_id == category_id,
+            Category.tenant_id == tenant_id,
+            Category.store_id == store_id,
         )
     )
     if child_count:
@@ -132,6 +148,7 @@ def delete_category(
         select(Product.id).where(
             Product.category_id == category_id,
             Product.tenant_id == tenant_id,
+            Product.store_id == store_id,
             Product.deleted.is_(False),
         )
     )
