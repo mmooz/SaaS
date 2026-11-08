@@ -1,119 +1,104 @@
 <template>
-  <div class="page">
-    <!-- 顶部深色栏 -->
-    <header class="page-header">
-      <div class="header-title">交接班</div>
-      <el-button class="back-btn" @click="$router.push('/')"><el-icon><ArrowLeft /></el-icon>&nbsp;返回收银台</el-button>
-    </header>
+  <div class="shift-page">
+    <!-- 当前班次信息卡 -->
+    <section class="info-card">
+      <div class="card-title">
+        {{ shift ? (offlineShift ? '当前班次（离线）' : '当前班次') : '尚未接班' }}
+      </div>
 
-    <div class="page-body">
-      <!-- 当前班次信息卡 -->
-      <section class="info-card">
-        <div class="card-title">
-          {{ shift ? (offlineShift ? '当前班次（离线）' : '当前班次') : '尚未接班' }}
+      <!-- 未接班：填写现金底金后开班 -->
+      <div v-if="!shift" class="open-box">
+        <div class="open-tip">接班后才能开始收银，本班订单将归属该班次统计。</div>
+        <div class="open-row">
+          <span class="open-label">现金底金</span>
+          <el-input-number v-model="baseCash" :min="0" :precision="2" :step="100" />
+          <el-button type="primary" :loading="loading" @click="doOpenShift">接 班</el-button>
         </div>
+      </div>
 
-        <!-- 未接班：填写现金底金后开班 -->
-        <div v-if="!shift" class="open-box">
-          <div class="open-tip">接班后才能开始收银，本班订单将归属该班次统计。</div>
-          <div class="open-row">
-            <span class="open-label">现金底金</span>
-            <el-input-number v-model="baseCash" :min="0" :precision="2" :step="100" size="large" />
-            <el-button type="primary" class="big-btn" :loading="loading" @click="doOpenShift">接 班</el-button>
+      <!-- 已接班：展示本班实时汇总 -->
+      <div v-else>
+        <div class="info-grid">
+          <div class="info-item">
+            <div class="info-label">收银员</div>
+            <div class="info-value">{{ cashierName }}</div>
           </div>
-        </div>
-
-        <!-- 已接班：展示本班实时汇总 -->
-        <div v-else>
-          <div class="info-grid">
-            <div class="info-item">
-              <div class="info-label">收银员</div>
-              <div class="info-value">{{ cashierName }}</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">接班时间</div>
-              <div class="info-value num">{{ formatTime(shift.start_at) }}</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">当前订单数</div>
-              <div class="info-value num">{{ summary.orders }} 单</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">本班销售额</div>
-              <div class="info-value num money">¥{{ summary.sales.toFixed(2) }}</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">现金收入</div>
-              <div class="info-value num money">¥{{ summary.cash.toFixed(2) }}</div>
-            </div>
-            <div class="info-item">
-              <div class="info-label">现金应交</div>
-              <div class="info-value num money">¥{{ summary.cashShould.toFixed(2) }}</div>
-            </div>
+          <div class="info-item">
+            <div class="info-label">接班时间</div>
+            <div class="info-value num">{{ formatTime(shift.start_at) }}</div>
           </div>
-          <!-- 交接班大按钮（交班成功后隐藏） -->
-          <el-button v-if="!settled" type="primary" class="big-btn handover-btn" :loading="loading" @click="doHandover">
-            <el-icon><Switch /></el-icon>&nbsp;交 接 班
-          </el-button>
-        </div>
-      </section>
-
-      <!-- 交班成功汇总卡 -->
-      <section v-if="settled" class="summary-card">
-        <div class="summary-head">
-          <div class="success-icon">✔</div>
-          <div>
-            <div class="card-title">交班成功</div>
-            <div class="summary-time num">{{ closeTime }} · 已生成本班汇总小票</div>
+          <div class="info-item">
+            <div class="info-label">当前订单数</div>
+            <div class="info-value num">{{ summary.orders }} 单</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">本班销售额</div>
+            <div class="info-value num money">¥{{ summary.sales.toFixed(2) }}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">现金收入</div>
+            <div class="info-value num money">¥{{ summary.cash.toFixed(2) }}</div>
+          </div>
+          <div class="info-item">
+            <div class="info-label">现金应交</div>
+            <div class="info-value num money">¥{{ summary.cashShould.toFixed(2) }}</div>
           </div>
         </div>
-        <!-- 各支付方式分行金额 -->
-        <div class="summary-rows">
-          <div class="sum-row">
-            <span>订单总数</span>
-            <span class="num">{{ summary.orders }} 单</span>
-          </div>
-          <div class="sum-row total">
-            <span>本班销售额</span>
-            <span class="num">¥{{ summary.sales.toFixed(2) }}</span>
-          </div>
-          <div class="sum-row" v-for="p in summary.payments" :key="p.method">
-            <span>{{ p.method }}</span>
-            <span class="num">¥{{ p.amount.toFixed(2) }}</span>
-          </div>
-          <div class="sum-row" v-if="summary.refund > 0">
-            <span>退款金额</span>
-            <span class="num">-¥{{ summary.refund.toFixed(2) }}</span>
-          </div>
-          <div class="sum-row">
-            <span>现金应交（含底金）</span>
-            <span class="num">¥{{ summary.cashShould.toFixed(2) }}</span>
-          </div>
-          <div class="sum-row" v-if="summary.actualCash !== null">
-            <span>实际点钞</span>
-            <span class="num">¥{{ summary.actualCash.toFixed(2) }}</span>
-          </div>
-        </div>
-        <!-- 打印交接小票 -->
-        <el-button class="big-btn print-btn" @click="printSummary">
-          <el-icon><Printer /></el-icon>&nbsp;打印交接小票
-        </el-button>
-      </section>
-
-      <!-- 底部返回收银台 -->
-      <div class="footer-actions">
-        <el-button class="big-btn" @click="$router.push('/')">
-          <el-icon><ArrowLeft /></el-icon>&nbsp;返回收银台
+        <!-- 交接班大按钮（交班成功后隐藏） -->
+        <el-button v-if="!settled" type="primary" class="handover-btn" :loading="loading" @click="doHandover">
+          <el-icon><Switch /></el-icon>&nbsp;交 接 班
         </el-button>
       </div>
-    </div>
+    </section>
+
+    <!-- 交班成功汇总卡 -->
+    <section v-if="settled" class="summary-card">
+      <div class="summary-head">
+        <div class="success-icon">✔</div>
+        <div>
+          <div class="card-title">交班成功</div>
+          <div class="summary-time num">{{ closeTime }} · 已生成本班汇总小票</div>
+        </div>
+      </div>
+      <!-- 各支付方式分行金额 -->
+      <div class="summary-rows">
+        <div class="sum-row">
+          <span>订单总数</span>
+          <span class="num">{{ summary.orders }} 单</span>
+        </div>
+        <div class="sum-row total">
+          <span>本班销售额</span>
+          <span class="num">¥{{ summary.sales.toFixed(2) }}</span>
+        </div>
+        <div class="sum-row" v-for="p in summary.payments" :key="p.method">
+          <span>{{ p.method }}</span>
+          <span class="num">¥{{ p.amount.toFixed(2) }}</span>
+        </div>
+        <div class="sum-row" v-if="summary.refund > 0">
+          <span>退款金额</span>
+          <span class="num">-¥{{ summary.refund.toFixed(2) }}</span>
+        </div>
+        <div class="sum-row">
+          <span>现金应交（含底金）</span>
+          <span class="num">¥{{ summary.cashShould.toFixed(2) }}</span>
+        </div>
+        <div class="sum-row" v-if="summary.actualCash !== null">
+          <span>实际点钞</span>
+          <span class="num">¥{{ summary.actualCash.toFixed(2) }}</span>
+        </div>
+      </div>
+      <!-- 打印交接小票 -->
+      <el-button class="print-btn" @click="printSummary">
+        <el-icon><Printer /></el-icon>&nbsp;打印交接小票
+      </el-button>
+    </section>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Printer, Switch } from '@element-plus/icons-vue'
+import { Printer, Switch } from '@element-plus/icons-vue'
 import { closeShift, fetchCurrentShift, fetchShiftSummary, isNetworkError, openShift } from '../api'
 import { offlineStore } from '../services/offline/OfflineStore'
 import { offlineSnowflake } from '../services/offline/Snowflake'
@@ -409,69 +394,19 @@ onMounted(loadShift)
 </script>
 
 <style scoped>
-.page {
-  min-height: 100vh;
+.shift-page {
   display: flex;
   flex-direction: column;
-  background: var(--neutral-100);
+  gap: 16px;
 }
 
-/* ----- 顶部深色栏（与 PosMain 呼应） ----- */
-.page-header {
-  height: 64px;
-  background: var(--neutral-900);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  flex-shrink: 0;
-}
-.header-title {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 1px;
-}
-.page-header :deep(.el-button) {
-  height: 44px;
-  border-radius: var(--radius-md);
-  background: oklch(30% 0.02 152);
-  border-color: oklch(45% 0.02 152);
-  color: #fff;
-  font-size: 16px;
-}
-.page-header :deep(.el-button:hover) {
-  background: oklch(40% 0.03 152);
-  color: #fff;
-}
-
-/* ----- 页面主体 ----- */
-.page-body {
-  flex: 1;
-  width: 100%;
-  max-width: 860px;
-  margin: 0 auto;
-  padding: var(--space-5) var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
-/* 触屏大按钮统一样式 */
-.big-btn {
-  height: 48px;
-  font-size: 17px;
-  border-radius: var(--radius-md);
-  padding: 0 28px;
-}
-
-/* ----- 当前班次信息卡 ----- */
+/* 当前班次信息卡（与管理页卡片一致） */
 .info-card {
   background: #fff;
-  border-radius: var(--radius-lg);
   border: 1px solid var(--neutral-200);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
-  padding: var(--space-4);
+  padding: 16px 18px;
 }
 .card-title {
   font-size: 17px;
@@ -502,17 +437,16 @@ onMounted(loadShift)
   color: var(--neutral-900);
 }
 .info-value.money {
-  font-size: 24px;
   color: var(--danger);
 }
 .handover-btn {
   width: 100%;
-  height: 56px;
-  font-size: 20px;
+  height: 48px;
+  font-size: 17px;
   letter-spacing: 6px;
 }
 
-/* ----- 未接班开班区 ----- */
+/* 未接班开班区 */
 .open-box {
   display: flex;
   flex-direction: column;
@@ -532,13 +466,13 @@ onMounted(loadShift)
   color: var(--neutral-600);
 }
 
-/* ----- 交班汇总卡 ----- */
+/* 交班汇总卡（保持品牌色高亮，但圆角/阴影与管理页一致） */
 .summary-card {
   background: #fff;
-  border-radius: var(--radius-lg);
   border: 1px solid var(--brand);
-  box-shadow: var(--shadow-md);
-  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
 }
 .summary-head {
   display: flex;
@@ -590,11 +524,7 @@ onMounted(loadShift)
 }
 .print-btn {
   width: 100%;
-}
-
-/* ----- 底部操作 ----- */
-.footer-actions {
-  display: flex;
-  justify-content: center;
+  height: 48px;
+  font-size: 16px;
 }
 </style>

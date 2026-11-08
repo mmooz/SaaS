@@ -1,26 +1,17 @@
 <template>
-  <div class="page">
-    <!-- 顶部深色栏 -->
-    <header class="page-header">
-      <div class="header-title">订单查询</div>
-      <el-button class="back-btn" @click="$router.push('/')">
-        <el-icon><ArrowLeft /></el-icon>&nbsp;返回收银台
-      </el-button>
-    </header>
+  <div class="orders-page">
+    <!-- 可见范围：由服务端 scope 决定，前端仅展示不做权限判断 -->
+    <div class="scope-banner" :class="scope === 'all' ? 'all' : 'own'">
+      <span class="scope-dot" />
+      <span class="scope-text">{{ scopeText }}</span>
+      <span class="scope-user">{{ cashierLabel }}</span>
+    </div>
 
-    <div class="page-body">
-      <!-- 可见范围：由服务端 scope 决定，前端仅展示不做权限判断 -->
-      <div class="scope-banner" :class="scope === 'all' ? 'all' : 'own'">
-        <span class="scope-dot" />
-        <span class="scope-text">{{ scopeText }}</span>
-        <span class="scope-user">{{ cashierLabel }}</span>
-      </div>
-
-      <!-- 筛选工具栏 -->
+    <!-- 筛选工具栏 -->
+    <div class="toolbar-card">
       <div class="filters">
         <el-input
           v-model="filters.keyword"
-          size="large"
           placeholder="订单号 / 会员手机号"
           clearable
           class="filter-keyword"
@@ -31,29 +22,30 @@
         <el-date-picker
           v-model="filters.dateRange"
           type="daterange"
-          size="large"
           range-separator="至"
           start-placeholder="开始日期"
           end-placeholder="结束日期"
           value-format="YYYY-MM-DD"
           class="filter-date"
         />
-        <el-select v-model="filters.status" size="large" placeholder="订单状态" clearable class="filter-status">
+        <el-select v-model="filters.status" placeholder="订单状态" clearable class="filter-status">
           <el-option label="待支付" value="pending" />
           <el-option label="已支付" value="paid" />
           <el-option label="部分退款" value="partially_refunded" />
           <el-option label="已退款" value="refunded" />
         </el-select>
-        <el-button type="primary" class="big-btn" :icon="Search" @click="search">查 询</el-button>
-        <el-button class="big-btn" :icon="Refresh" @click="reset">重 置</el-button>
+        <el-button type="primary" :icon="Search" @click="search">查 询</el-button>
+        <el-button :icon="Refresh" @click="reset">重 置</el-button>
       </div>
+    </div>
 
-      <!-- 本机待上传订单提示：离线结算的单也会计入本账号产生的订单 -->
-      <div v-if="localOrders.length" class="local-tip">
-        本机还有 {{ localOrders.length }} 笔离线订单待上传，已在下方列表以「待上传」标出；联网补传后自动并入服务端记录。
-      </div>
+    <!-- 本机待上传订单提示：离线结算的单也会计入本账号产生的订单 -->
+    <div v-if="localOrders.length" class="local-tip">
+      本机还有 {{ localOrders.length }} 笔离线订单待上传，已在下方列表以「待上传」标出；联网补传后自动并入服务端记录。
+    </div>
 
-      <!-- 订单列表 -->
+    <!-- 订单列表 -->
+    <div class="table-card">
       <el-table
         v-loading="loading"
         :data="rows"
@@ -92,13 +84,12 @@
         </el-table-column>
         <el-table-column label="操作" min-width="100" fixed="right">
           <template #default="{ row }">
-            <el-button type="primary" class="table-btn" @click="showDetail(row)">详情</el-button>
+            <el-button link type="primary" size="small" @click="showDetail(row)">详情</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <!-- 分页 -->
-      <div class="pager">
+      <div class="pagination-wrap">
         <el-pagination
           v-model:current-page="page"
           background
@@ -154,7 +145,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { ArrowLeft, Refresh, Search } from '@element-plus/icons-vue'
+import { Refresh, Search } from '@element-plus/icons-vue'
 import { fetchOrders } from '../api'
 import { usePosStore } from '../stores/posStore'
 import { OrderPrintMapper } from '../services/print/OrderPrintMapper'
@@ -272,83 +263,57 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.page {
-  min-height: 100vh;
+.orders-page {
   display: flex;
   flex-direction: column;
-  background: var(--neutral-100);
+  gap: 16px;
 }
 
-/* ----- 顶部深色栏（与收银台呼应） ----- */
-.page-header {
-  height: 64px;
-  background: var(--neutral-900);
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  flex-shrink: 0;
-}
-.header-title {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: 1px;
-}
-.page-header :deep(.el-button) {
-  height: 44px;
-  border-radius: var(--radius-md);
-  background: oklch(30% 0.02 152);
-  border-color: oklch(45% 0.02 152);
-  color: #fff;
-  font-size: 16px;
-}
-
-.page-body {
-  flex: 1;
-  width: 100%;
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: var(--space-5) var(--space-4);
-}
-
-/* ----- 可见范围横幅 ----- */
+/* ----- 可见范围横幅（与管理页信息条风格一致） ----- */
 .scope-banner {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
+  border: 1px solid var(--neutral-200);
   border-radius: var(--radius-md);
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: var(--space-3);
-}
-.scope-banner.own {
-  background: oklch(94% 0.04 230);
-  color: oklch(38% 0.09 230);
-}
-.scope-banner.all {
-  background: oklch(94% 0.05 152);
-  color: oklch(36% 0.08 152);
+  background: var(--neutral-50);
+  font-size: 14px;
+  color: var(--neutral-700);
 }
 .scope-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: currentColor;
+  flex-shrink: 0;
+  background: var(--brand);
+}
+.scope-banner.all .scope-dot {
+  background: var(--accent);
 }
 .scope-user {
   margin-left: auto;
-  font-weight: 500;
-  opacity: 0.8;
+  color: var(--neutral-500);
 }
 
-/* ----- 筛选工具栏 ----- */
+/* ----- 筛选工具栏（与管理页 toolbar-card 一致） ----- */
+.toolbar-card {
+  background: #fff;
+  border: 1px solid var(--neutral-200);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
 .filters {
   display: flex;
-  gap: var(--space-3);
-  flex-wrap: wrap;
   align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 .filter-keyword {
   width: 260px;
@@ -359,37 +324,29 @@ onMounted(async () => {
 .filter-status {
   width: 150px;
 }
-.filters :deep(.el-input__wrapper),
-.filters :deep(.el-select__wrapper) {
-  min-height: 48px;
-  border-radius: var(--radius-md);
-}
-.big-btn {
-  height: 48px;
-  font-size: 16px;
-  border-radius: var(--radius-md);
-  padding: 0 24px;
-}
 .local-tip {
-  margin-top: var(--space-3);
   padding: 10px 14px;
   border-radius: var(--radius-md);
-  background: oklch(96% 0.06 75);
-  color: oklch(42% 0.1 75);
+  background: var(--neutral-50);
+  border: 1px solid var(--neutral-200);
+  color: var(--neutral-600);
   font-size: 14px;
   line-height: 1.6;
 }
 
-/* ----- 表格 ----- */
-.order-table {
-  margin-top: var(--space-3);
+/* ----- 表格卡片（与管理页 table-card 一致） ----- */
+.table-card {
+  background: #fff;
+  border: 1px solid var(--neutral-200);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  padding: 6px 18px 16px;
 }
 .order-table :deep(.el-table__row) {
-  font-size: 15px;
+  font-size: 14px;
 }
 .order-table :deep(th.el-table__cell) {
-  font-size: 15px;
+  font-size: 14px;
   background: var(--neutral-50);
   color: var(--neutral-600);
 }
@@ -405,15 +362,10 @@ onMounted(async () => {
   font-weight: 700;
   color: var(--danger);
 }
-.table-btn {
-  height: 40px;
-  font-size: 15px;
-  padding: 0 16px;
-}
-.pager {
+.pagination-wrap {
   display: flex;
   justify-content: flex-end;
-  margin-top: var(--space-4);
+  margin-top: 14px;
 }
 
 /* ----- 详情抽屉 ----- */
