@@ -3,7 +3,6 @@
     <!-- 顶部深色栏 -->
     <header class="page-header">
       <div class="header-title">系统设置</div>
-      <el-button class="back-btn" @click="$router.push('/')"><el-icon><ArrowLeft /></el-icon>&nbsp;返回收银台</el-button>
     </header>
 
     <div class="page-body settings-body">

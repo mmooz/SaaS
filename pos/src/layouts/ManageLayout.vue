@@ -37,7 +37,6 @@
         <el-sub-menu index="g-sys">
           <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
           <el-menu-item index="/manage/settings"><el-icon><Setting /></el-icon>系统设置</el-menu-item>
-          <el-menu-item index="/"><el-icon><ArrowLeft /></el-icon>返回收银台</el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-aside>
@@ -47,6 +46,9 @@
       <el-header class="manage-header">
         <div class="header-title">{{ currentTitle }}</div>
         <div class="header-right">
+          <el-button class="back-pos-btn" @click="backToPos">
+            <el-icon><ArrowLeft /></el-icon>返回收银台
+          </el-button>
           <div class="store-chip">
             <el-icon><Shop /></el-icon>
             <span>{{ storeLabel }}</span>
@@ -111,7 +113,7 @@ const openGroups = computed(() => {
   if (['/manage/orders', '/manage/shift'].includes(p)) {
     return ['g-biz']
   }
-  if (['/manage/settings', '/'].includes(p)) {
+  if (['/manage/settings'].includes(p)) {
     return ['g-sys']
   }
   return []
@@ -137,6 +139,10 @@ const logout = () => {
   clearStoreInfo()
   localStorage.removeItem('pos_cashier')
   router.replace('/login')
+}
+
+const backToPos = () => {
+  router.push('/')
 }
 </script>
 
@@ -176,6 +182,12 @@ const logout = () => {
 .brand-sub {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+.back-pos-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
 }
 .side-menu {
   border-right: none;
