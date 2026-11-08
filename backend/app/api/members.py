@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_manager_user, get_store_id, get_tenant_id
 from app.models import Member, MemberTransaction, Order, User
@@ -335,6 +336,17 @@ def consume_member(
     user: User = Depends(get_manager_user),
 ):
     """会员消费：扣减储值余额、累计消费额并奖励积分（流水记录发生门店）。"""
+    # ---- R20 临时资金管控（Q06 完成后由 B4 统一解除，非永久业务逻辑）----
+    # 在线储值扣款按开关一律下线：返回明确业务错误，不静默、不入离线队列。
+    # ⚠️ 警告：Q06 结算接口完成前**严禁**把 ONLINE_STORED_VALUE_PAYMENT_ENABLED
+    # 设为 true，否则「有订单无扣款」的「不扣先返」套利闭环重新敞开（设计 A.3.5）。
+    # 开关打开时走下方原有逻辑，供 B4 解除管控后直接复用。
+    if not settings.online_stored_value_payment_enabled:
+        raise HTTPException(
+            status_code=400,
+            detail="在线储值支付已临时下线（临时管控，Q06 完成后由 B4 解除），请改用其它支付方式",
+        )
+
     member = _get_member(db, member_id, tenant_id)
     # 余额不足则拒绝扣款
     if (member.balance or 0) < data.amount:

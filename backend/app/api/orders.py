@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.dependencies import get_manager_user, get_store_id, get_tenant_id
 from app.models import (
@@ -29,6 +30,12 @@ from app.services.refund_service import RefundService
 
 # 订单路由
 router = APIRouter(prefix="/api/orders", tags=["订单管理"])
+
+# R20：区分「在线实时上传」与「离线补传」的时间容差（分钟）。
+# 在线结算从生成 created_at 到上传通常在秒级完成；超过该容差即按离线补传处理，
+# 触发金额 / 时限二次校验。沿用 _validate_order_payload 第 3 项「下单时间可早
+# （离线补传）」的既有口径，不新增请求字段、不改 OrderCreate 契约。
+OFFLINE_UPLOAD_TOLERANCE_MINUTES = 1
 
 
 def _member_mobiles(db: Session, orders: list[Order]) -> dict[int, str]:
@@ -158,6 +165,29 @@ def _validate_order_payload(
             created = created.replace(tzinfo=timezone.utc)
         if created > datetime.now(timezone.utc) + timedelta(minutes=5):
             raise HTTPException(status_code=400, detail="下单时间不能晚于当前时间")
+
+    # 3.5 R20：离线订单补传的服务端二次校验（前端 posStore.js 入队前已守卫，此处兜底）。
+    # 判定口径：created_at 距今超过 OFFLINE_UPLOAD_TOLERANCE_MINUTES 视为离线补传
+    # （在线结算几乎实时上传）。数值全部取自 config 可配置项，业务代码不硬编码；
+    # 文案只说「当前策略允许的限额 / 时限」，不写死金额与时限数字。
+    # R20 临时管控（非永久业务逻辑），Q06 完成后由 B4 统一解除；产品确认最终数值后
+    # 只改 config / .env，不改代码、不发版。
+    if data.created_at is not None:
+        created = data.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = datetime.now(timezone.utc) - created
+        if age > timedelta(minutes=OFFLINE_UPLOAD_TOLERANCE_MINUTES):
+            if data.total_amount > settings.offline_order_max_amount:
+                raise HTTPException(
+                    status_code=400,
+                    detail="离线订单金额超过当前策略允许的限额，请分单结算或改用在线收银",
+                )
+            if age > timedelta(hours=settings.offline_order_max_age_hours):
+                raise HTTPException(
+                    status_code=400,
+                    detail="离线订单超出当前策略允许的补传时限，请联系管理员人工处理",
+                )
 
     # 4. 自定义主键冲突提前拦截，避免 IntegrityError 变成 500
     if data.id is not None and db.get(Order, data.id) is not None:
