@@ -177,6 +177,21 @@ def main() -> int:
     )
     check("收银员幂等他人单 403", r.status_code == 403, str(r.status_code))
 
+    # 7. 桌面端日期筛选参数：POS 用 URLSearchParams（空格编码为 +），
+    #    后台用 encodeURIComponent（空格编码为 %20），两者都须被正确解析
+    date_range = "start=2020-01-01+00%3A00%3A00&end=2099-12-31+23%3A59%3A59"
+    r = client.get(f"/api/orders?{date_range}", headers=headers("cashier_a"))
+    check("日期范围（+ 编码）200", r.status_code == 200, f"{r.status_code} {r.text[:160]}")
+    if r.status_code == 200:
+        check("日期范围含本人 2 单", r.json().get("total") == 2, str(r.json().get("total")))
+    r = client.get(
+        "/api/orders?start=2020-01-01%2000%3A00%3A00&end=2099-12-31%2023%3A59%3A59",
+        headers=headers("cashier_a"),
+    )
+    check("日期范围（%20 编码）200", r.status_code == 200, str(r.status_code))
+    r = client.get("/api/orders?keyword=SCOPE-A-0001", headers=headers("cashier_a"))
+    check("订单号关键字命中本人单", r.status_code == 200 and r.json().get("total") == 1, str(r.status_code))
+
     failed = [c for c in checks if not c[1]]
     for name, ok, detail in checks:
         print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  [{detail}]" if not ok else ""))

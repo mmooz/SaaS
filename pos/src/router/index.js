@@ -27,6 +27,12 @@ const routes = [
     meta: { title: '退款退货' },
   },
   {
+    path: '/orders',
+    name: 'Orders',
+    component: () => import('../views/Orders.vue'),
+    meta: { title: '订单查询' },
+  },
+  {
     path: '/reprint',
     name: 'Reprint',
     component: () => import('../views/Reprint.vue'),
