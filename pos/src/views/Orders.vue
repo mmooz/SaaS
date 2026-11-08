@@ -54,7 +54,12 @@
       </div>
 
       <!-- 订单列表 -->
-      <el-table v-loading="loading" :data="rows" class="order-table" empty-text="没有符合条件的订单">
+      <el-table
+        v-loading="loading"
+        :data="rows"
+        class="order-table"
+        empty-text="当前账号暂无订单；新结算的订单会自动归属到本账号（历史无归属订单仅管理员可见）"
+      >
         <el-table-column label="订单号" min-width="210">
           <template #default="{ row }">
             <span class="num order-no">{{ row.order_no }}</span>
