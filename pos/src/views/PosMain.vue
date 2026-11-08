@@ -19,6 +19,7 @@
         <el-button size="large" @click="$router.push('/reprint')"><el-icon><Printer /></el-icon>&nbsp;补打</el-button>
         <!-- Q17：仅店长及以上可见退款入口，收银员无入口 -->
         <el-button v-if="isManager" size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
+        <el-button v-if="isManager" size="large" type="warning" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;管理</el-button>
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
         <el-button size="large" @click="$router.push('/settings')"><el-icon><Setting /></el-icon></el-button>
         <el-button size="large" @click="logout"><el-icon><SwitchButton /></el-icon>&nbsp;退出</el-button>
@@ -287,7 +288,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  Search, Printer, RefreshLeft, Switch, Setting, Folder, SwitchButton, List,
+  Search, Printer, RefreshLeft, Switch, Setting, Folder, SwitchButton, List, Menu,
 } from '@element-plus/icons-vue'
 import { usePosStore } from '../stores/posStore'
 import { PrintService } from '../services/print/PrintService'
