@@ -32,7 +32,7 @@
               <el-table-column prop="mobile" label="手机号" width="130">
                 <template #default="{ row }"><span class="num">{{ row.mobile }}</span></template>
               </el-table-column>
-              <el-table-column prop="name" label="姓名" width="110" />
+              <el-table-column prop="name" label="姓名" min-width="110" />
               <el-table-column label="等级" width="90" align="center">
                 <template #default="{ row }">
                   <el-tag size="small" :type="levelTagType(row.level)" effect="light">{{ levelText(row.level) }}</el-tag>
@@ -44,13 +44,13 @@
               <el-table-column label="储值余额(元)" width="120" align="right">
                 <template #default="{ row }"><span class="num balance">¥{{ Number(row.balance).toFixed(2) }}</span></template>
               </el-table-column>
-              <el-table-column label="累计消费(元)" width="120" align="right">
+              <el-table-column label="累计消费(元)" min-width="120" align="right">
                 <template #default="{ row }"><span class="num">¥{{ Number(row.total_spent).toFixed(2) }}</span></template>
               </el-table-column>
               <el-table-column label="注册时间" width="110">
                 <template #default="{ row }"><span class="num">{{ fmtTime(row.created_at, 10) }}</span></template>
               </el-table-column>
-              <el-table-column label="操作" width="180" align="center" fixed="right">
+              <el-table-column label="操作" min-width="180" align="center">
                 <template #default="{ row }">
                   <el-button link type="primary" size="small" @click="openEditMember(row)">编辑</el-button>
                   <el-button link type="warning" size="small" @click="goRecharge(row)">充值</el-button>
