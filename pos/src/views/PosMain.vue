@@ -79,14 +79,14 @@
             <div class="empty-icon">🛒</div>
             <p>请选择商品或放上秤盘</p>
           </div>
-          <div v-for="item in store.cart" :key="item.productId + item.weightKey" class="cart-item">
+          <div v-for="item in store.cart" :key="item.productId + (item.unit || 'base') + item.weightKey" class="cart-item">
             <div class="ci-main">
               <div class="ci-name">{{ item.name }}</div>
               <div class="ci-sub num">
                 <template v-if="item.weighted">
                   {{ item.weight.toFixed(3) }} kg × ¥{{ store.itemPrice(item).toFixed(2) }}
                 </template>
-                <template v-else>× {{ item.qty }} · ¥{{ store.itemPrice(item).toFixed(2) }}</template>
+                <template v-else>× {{ item.qty }} {{ item.unit || '' }} · ¥{{ store.itemPrice(item).toFixed(2) }}</template>
               </div>
             </div>
             <div class="ci-right">
@@ -239,6 +239,39 @@
       </template>
     </el-dialog>
 
+    <!-- 多单位商品选单位弹窗 -->
+    <el-dialog v-model="unitDialog.visible" title="选择销售单位" width="460px">
+      <div v-if="unitDialog.product" class="unit-dialog">
+        <div class="ud-product">{{ unitDialog.product.name }}</div>
+        <div class="ud-qty">
+          <span class="ud-label">数量</span>
+          <el-input-number v-model="unitDialog.qty" :min="1" :max="999" :precision="0" />
+        </div>
+        <div class="ud-list">
+          <div
+            v-for="u in unitDialog.product.units"
+            :key="u.unit"
+            class="ud-row"
+          >
+            <div class="ud-unit">{{ u.unit }}</div>
+            <div class="ud-meta">
+              <span class="ud-eq">1 {{ u.unit }} = {{ u.factor }} {{ unitDialog.product.unit }}</span>
+              <span class="ud-price">
+                零售 ¥{{ Number(u.price).toFixed(2) }}
+                <template v-if="u.member_price != null"> · 会员 ¥{{ Number(u.member_price).toFixed(2) }}</template>
+              </span>
+            </div>
+            <el-button type="primary" size="small" @click="confirmUnit(u)">
+              加入 {{ unitDialog.qty }} {{ u.unit }}
+            </el-button>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="unitDialog.visible = false">取消</el-button>
+      </template>
+    </el-dialog>
+
     <!-- 支付弹窗 -->
     <el-dialog v-model="payDialog" :title="`${payMethod} 收款`" width="420px" :show-close="false">
       <div class="pay-dialog">
@@ -340,6 +373,8 @@ const products = computed(() =>
     pinyin: p.pinyin || '',
     cate: store.categoryName(p.category_id) || '',
     barcode: p.barcode,
+    // 多单位列表：基础单位(factor=1) + 附加单位；单单位商品为空或长度 1
+    units: Array.isArray(p.units) ? p.units : [],
   })),
 )
 
@@ -369,6 +404,11 @@ const currentProduct = ref(null)
 // 添加商品：按件直接入单，称重进入称重流程
 const addProduct = (p) => {
   if (p.pricingMode === 'count') {
+    // 多单位商品（超过 1 个可售单位）弹窗选择单位与数量
+    if (p.units && p.units.length > 1) {
+      openUnitDialog(p)
+      return
+    }
     store.addCountProduct(p)
     ElMessage.success(`已加入：${p.name}`)
     return
@@ -376,6 +416,22 @@ const addProduct = (p) => {
   currentProduct.value = p
   manualWeight.value = false
   startWeighing()
+}
+
+// 多单位商品选单位弹窗状态
+const unitDialog = ref({ visible: false, product: null, qty: 1 })
+// 打开选单位弹窗
+const openUnitDialog = (p) => {
+  unitDialog.value = { visible: true, product: p, qty: 1 }
+}
+// 确认以指定单位加入购物车
+const confirmUnit = (u) => {
+  const p = unitDialog.value.product
+  if (!p) return
+  const n = unitDialog.value.qty > 0 ? unitDialog.value.qty : 1
+  store.addCountProduct(p, u, n)
+  ElMessage.success(`已加入 ${n} ${u.unit} · ${p.name}`)
+  unitDialog.value.visible = false
 }
 
 // 扫码回车：优先匹配商品条码，其次解析称重标签码
@@ -388,8 +444,13 @@ const handleScan = () => {
   if (byBarcode) {
     keyword.value = ''
     if (byBarcode.pricingMode === 'count') {
-      store.addCountProduct(byBarcode)
-      ElMessage.success(`已加入：${byBarcode.name}`)
+      // 多单位商品同样弹窗选单位
+      if (byBarcode.units && byBarcode.units.length > 1) {
+        openUnitDialog(byBarcode)
+      } else {
+        store.addCountProduct(byBarcode)
+        ElMessage.success(`已加入：${byBarcode.name}`)
+      }
     } else {
       currentProduct.value = byBarcode
       manualWeight.value = false
@@ -1605,4 +1666,61 @@ onBeforeUnmount(() => {
   color: var(--neutral-500);
   line-height: 1.6;
 }
+
+/* 多单位选单位弹窗 */
+.unit-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ud-product {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--neutral-800);
+}
+.ud-qty {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ud-label {
+  font-size: 13px;
+  color: var(--neutral-600);
+}
+.ud-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ud-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--neutral-200);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.ud-unit {
+  width: 56px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  flex-shrink: 0;
+}
+.ud-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--neutral-600);
+}
+.ud-eq {
+  color: var(--neutral-700);
+}
+.ud-price {
+  color: var(--neutral-500);
+}
 </style>
+

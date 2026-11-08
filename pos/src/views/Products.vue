@@ -61,6 +61,11 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="可售单位" width="150">
+          <template #default="{ row }">
+            <span class="unit-list">{{ (row.units || []).map(u => u.unit).join(' / ') || row.unit }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="单价(元)" width="100" align="right">
           <template #default="{ row }"><span class="num price">¥{{ row.price.toFixed(2) }}</span></template>
         </el-table-column>
@@ -162,6 +167,25 @@
             <el-form-item label="进价" prop="cost">
               <el-input-number v-model="form.cost" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
+          </el-col>
+          <el-col :span="24">
+            <el-divider content-position="left">多单位与换算</el-divider>
+            <div class="units-hint">
+              基础单位为「<b>{{ form.unit }}</b>」（系数 1，价格取上方零售价/会员价）；可添加更大的销售单位，
+              如「条 = 10 {{ form.unit }}」「件 = 12 {{ form.unit }}」，各单位独立定价。
+            </div>
+            <div v-for="(u, idx) in form.extraUnits" :key="idx" class="extra-unit-row">
+              <el-input v-model="u.unit" placeholder="单位名(如 条)" class="eu-input" />
+              <span class="eu-eq">=</span>
+              <el-input-number v-model="u.factor" :min="0.01" :precision="2" :step="1" class="eu-factor" controls-position="right" />
+              <span class="eu-eq">{{ form.unit }}</span>
+              <span class="eu-label">零售价</span>
+              <el-input-number v-model="u.price" :min="0" :precision="2" :step="0.1" class="eu-price" controls-position="right" />
+              <span class="eu-label">会员价</span>
+              <el-input-number v-model="u.memberPrice" :min="0" :precision="2" :step="0.1" class="eu-price" controls-position="right" />
+              <el-button link type="danger" @click="form.extraUnits.splice(idx, 1)">删除</el-button>
+            </div>
+            <el-button class="add-unit-btn" @click="addExtraUnit">+ 添加单位</el-button>
           </el-col>
           <el-col :span="12">
             <el-form-item label="保质期(天)" prop="shelfLife">
@@ -324,6 +348,7 @@ const toRow = (p) => ({
   safetyStock: Number(p.safety_stock) || 0,
   labelPrint: !!p.label_enabled,
   enabled: !!p.enabled,
+  units: Array.isArray(p.units) ? p.units : [],
 })
 
 // ---- 筛选 / 分页状态 ----
@@ -414,6 +439,8 @@ const form = ref({
   id: 0, barcode: '', name: '', pinyin: '', category: '', pricing: '称重', unit: 'kg',
   price: 0, memberPrice: 0, cost: 0, shelfLife: 30, stock: 0, safetyStock: 0, labelPrint: true,
   enabled: true,
+  // 附加销售单位（factor>1）：[{ unit, factor, price, memberPrice }]
+  extraUnits: [],
 })
 
 // 表单校验规则
@@ -433,13 +460,30 @@ const openAdd = () => {
     id: 0, barcode: '', name: '', pinyin: '', category: '', pricing: '称重', unit: 'kg',
     price: 0, memberPrice: 0, cost: 0, shelfLife: 30, stock: 0, safetyStock: 0, labelPrint: true,
     enabled: true,
+    extraUnits: [],
   }
   formVisible.value = true
 }
 
-// 打开编辑弹窗：拷贝行数据到表单
+// 新增一个附加单位行（默认系数 1，用户需改为大于 1 的值）
+const addExtraUnit = () => {
+  form.value.extraUnits.push({ unit: '', factor: 1, price: 0, memberPrice: 0 })
+}
+
+// 打开编辑弹窗：拷贝行数据到表单，并拆解出基础单位与附加单位
 const openEdit = (row) => {
-  form.value = { ...row }
+  const units = Array.isArray(row.units) ? row.units : []
+  const base = units.find((u) => u.factor === 1) || units[0] || {}
+  const extra = units.filter((u) => u.factor !== 1).map((u) => ({
+    unit: u.unit, factor: u.factor, price: u.price, memberPrice: u.member_price ?? 0,
+  }))
+  form.value = {
+    ...row,
+    unit: base.unit || row.unit,
+    price: base.price ?? row.price,
+    memberPrice: base.member_price ?? row.memberPrice,
+    extraUnits: extra,
+  }
   formVisible.value = true
 }
 
@@ -456,13 +500,25 @@ const toPayload = (f) => ({
   pricing_mode: f.pricing === '称重' ? 'weigh' : 'count',
   unit: f.unit,
   price: f.price,
-  member_price: f.memberPrice,
+  member_price: f.memberPrice || null,
   cost_price: f.cost,
   shelf_life_days: f.shelfLife,
   stock: f.stock,
   safety_stock: f.safetyStock,
   label_enabled: f.labelPrint,
   enabled: f.enabled !== false,
+  // 完整可售单位列表：基础单位(factor=1) + 附加单位
+  units: [
+    { unit: f.unit, factor: 1, price: f.price, member_price: f.memberPrice || null },
+    ...(f.extraUnits || [])
+      .filter((u) => u.unit && Number(u.factor) > 0)
+      .map((u) => ({
+        unit: u.unit,
+        factor: Number(u.factor),
+        price: u.price,
+        member_price: u.memberPrice || null,
+      })),
+  ],
 })
 
 // 提交表单：新增或更新商品
@@ -645,6 +701,46 @@ onMounted(async () => {
 .unit {
   font-size: 12px;
   color: var(--neutral-400);
+}
+/* 多单位换算区段 */
+.units-hint {
+  font-size: 12px;
+  color: var(--neutral-600);
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+.units-hint b {
+  color: var(--brand-deep);
+}
+.extra-unit-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.eu-input {
+  width: 120px;
+}
+.eu-factor {
+  width: 110px;
+}
+.eu-price {
+  width: 120px;
+}
+.eu-eq {
+  color: var(--neutral-500);
+}
+.eu-label {
+  font-size: 12px;
+  color: var(--neutral-500);
+}
+.add-unit-btn {
+  margin-top: 2px;
+}
+.unit-list {
+  font-size: 13px;
+  color: var(--neutral-700);
 }
 .pagination-wrap {
   display: flex;

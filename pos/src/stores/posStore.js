@@ -418,24 +418,49 @@ export const usePosStore = defineStore('pos', {
     },
 
     /**
-     * 添加按件商品到购物车
-     * @param {object} product 商品对象
+     * 添加按件商品到购物车（支持多单位商品选择销售单位）
+     * @param {object} product 商品对象（同步数据，含 units 列表）
+     * @param {object|null} unitSpec 选中的销售单位 { unit, factor, price, member_price }；
+     *                               为 null 时取商品基础单位（factor=1）
+     * @param {number} qty 加入数量（默认 1）
      */
-    addCountProduct(product) {
-      const item = this.cart.find((i) => i.productId === product.id && !i.weighted)
+    addCountProduct(product, unitSpec = null, qty = 1) {
+      // 解析本次入单的单位：传入则用传入单位，否则取商品基础单位(factor=1)
+      const unit = unitSpec
+        ? {
+            name: unitSpec.unit,
+            factor: unitSpec.factor,
+            price: unitSpec.price,
+            memberPrice: unitSpec.member_price ?? null,
+          }
+        : {
+            name: product.unit,
+            factor: 1,
+            price: product.price,
+            memberPrice: product.memberPrice ?? null,
+          }
+      const unitKey = unit.name || null
+      // 同商品 + 同一单位视为同一行（不同单位分两行）
+      const item = this.cart.find(
+        (i) => i.productId === product.id && !i.weighted && i.unit === unitKey,
+      )
       if (item) {
-        item.qty += 1
+        item.qty += qty
         item.amount = +(item.qty * item.price).toFixed(2)
+        item.baseQty = +(item.qty * item.factor).toFixed(3)
       } else {
         this.cart.push({
           productId: product.id,
           name: product.name,
-          price: product.price,
-          memberPrice: product.memberPrice || null,
+          price: unit.price,
+          memberPrice: unit.memberPrice,
           categoryId: product.categoryId ?? null,
-          qty: 1,
+          qty,
           weighted: false,
-          amount: product.price,
+          unit: unitKey,
+          factor: unit.factor,
+          baseQty: +(unit.factor * qty).toFixed(3),
+          amount: +(unit.price * qty).toFixed(2),
           weightKey: 'count',
         })
       }
@@ -470,12 +495,14 @@ export const usePosStore = defineStore('pos', {
     incItem(item) {
       item.qty += 1
       item.amount = +(item.qty * item.price).toFixed(2)
+      if (item.factor) item.baseQty = +(item.qty * item.factor).toFixed(3)
       this.persistCart()
     },
     decItem(item) {
       if (item.qty <= 1) return this.removeItem(item)
       item.qty -= 1
       item.amount = +(item.qty * item.price).toFixed(2)
+      if (item.factor) item.baseQty = +(item.qty * item.factor).toFixed(3)
       this.persistCart()
     },
     removeItem(item) {
@@ -584,6 +611,8 @@ export const usePosStore = defineStore('pos', {
           name: i.name,
           qty: i.qty,
           weight_kg: i.weighted ? i.weight : null,
+          unit: i.weighted ? null : i.unit || null,
+          base_qty: i.weighted ? null : i.baseQty ?? i.qty,
           unit_price: unitPrice,
           amount,
           is_weighted: i.weighted,
