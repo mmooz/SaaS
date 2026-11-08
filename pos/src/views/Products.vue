@@ -148,32 +148,32 @@
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="零售价" prop="price">
               <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="会员价" prop="memberPrice">
               <el-input-number v-model="form.memberPrice" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="进价" prop="cost">
               <el-input-number v-model="form.cost" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="保质期(天)" prop="shelfLife">
               <el-input-number v-model="form.shelfLife" :min="0" :max="999" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="本店库存" prop="stock">
               <el-input-number v-model="form.stock" :min="0" :precision="1" :step="0.5" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="12">
             <el-form-item label="本店安全库存" prop="safetyStock">
               <el-input-number v-model="form.safetyStock" :min="0" :precision="1" style="width: 100%" />
             </el-form-item>
