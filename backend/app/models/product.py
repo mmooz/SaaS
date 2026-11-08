@@ -24,6 +24,10 @@ class Product(Base):
 
     __tablename__ = "products"
     # 表级约束：条码在同租户内唯一，不同租户可使用相同条码
+    # Q18（B3 过渡方案）：SQLite 不支持部分唯一索引，软删行仍会占用该唯一键。
+    # 删除商品与导入命中历史软删行时由应用层把其 barcode 改写为 D{id} 释放占用
+    # （见 api/products.py 与 services/excel_service.py）；PG baseline 改为部分
+    # 唯一索引 WHERE deleted = false 后可移除过渡逻辑。B3 不改索引定义、不改列宽。
     __table_args__ = (
         Index("uq_products_tenant_barcode", "tenant_id", "barcode", unique=True),
     )
@@ -31,6 +35,8 @@ class Product(Base):
     # 主键
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, default=next_id)
     # 商品条码（同租户内唯一，含生鲜店内码）
+    # Q18：软删行改写为 D{id}（≤20 字符），仍落在 String(32) 内，无需扩容；
+    # Q32-5 的 String(32) 列宽调整随 PG 批次，B3 保持现有列定义不动。
     barcode: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     # 商品名称
     name: Mapped[str] = mapped_column(String(80), nullable=False)

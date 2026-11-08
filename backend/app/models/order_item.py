@@ -28,13 +28,14 @@ class OrderItem(Base):
     product_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 商品名称（快照，避免商品改名影响历史订单）
     name: Mapped[str] = mapped_column(String(80), nullable=False)
-    # 数量（按件商品）
+    # 数量（按件商品）：Q14 前后端统一 3 位小数口径；列类型 Numeric(10,3) 随 PG / Q13
     qty: Mapped[int] = mapped_column(Integer, default=1)
-    # 重量 kg（称重商品）
+    # 重量 kg（称重商品）：Q14 前后端统一 3 位小数口径（0.005kg 分度不被抹平）；
+    # 列类型 Numeric(10,3) 随 PG / Q13，B3 不改列定义
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
-    # 成交单价
+    # 成交单价：金额统一 2 位小数；列类型 Numeric(12,2) 随 PG / Q13
     unit_price: Mapped[float] = mapped_column(Float, default=0)
-    # 行金额
+    # 行金额：金额统一 2 位小数；列类型 Numeric(12,2) 随 PG / Q13
     amount: Mapped[float] = mapped_column(Float, default=0)
     # 行优惠金额
     discount_amount: Mapped[float] = mapped_column(Float, default=0)

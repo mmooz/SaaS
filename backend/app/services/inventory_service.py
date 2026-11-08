@@ -6,6 +6,32 @@ from sqlalchemy.orm import Session
 from app.models import InventoryMovement, Product
 from app.services.product_stock_service import ProductStockService
 
+# Q14：前后端统一精度口径（B3 只统一 Python 层取整规则，不改任何列类型）。
+#   - 重量 / 数量（kg、件）保留 3 位小数，与 POS 端 weight.toFixed(3) 一致；
+#   - 金额（元）保留 2 位小数，沿用现有 round(x, 2) 口径，本批不改。
+# 列类型 Numeric(10,3) / Numeric(12,2) 与整数分改造随 PG / Q13 批次实施。
+# 该常量是库存重量取整的唯一来源，避免各调用点散落 magic number 3。
+STOCK_PRECISION_DIGITS: int = 3
+AMOUNT_PRECISION_DIGITS: int = 2
+
+
+def round_stock(value: float | None) -> float:
+    """按 Q14 统一口径取整重量 / 数量。
+
+    :param value: 原始数值（可为 None）
+    :return: 保留 3 位小数的浮点数
+    """
+    return round(float(value or 0), STOCK_PRECISION_DIGITS)
+
+
+def round_amount(value: float | None) -> float:
+    """按 Q14 统一口径取整金额。
+
+    :param value: 原始数值（可为 None）
+    :return: 保留 2 位小数的浮点数
+    """
+    return round(float(value or 0), AMOUNT_PRECISION_DIGITS)
+
 
 class InventoryService:
     """库存业务服务（静态方法，供 API 与订单流程复用）。
@@ -56,8 +82,8 @@ class InventoryService:
             tenant_id=tenant_id,
             product_id=product.id,
             type=movement_type,
-            qty=0 if is_weighed else round(delta, 3),
-            weight_kg=round(delta, 3) if is_weighed else None,
+            qty=0 if is_weighed else round_stock(delta),
+            weight_kg=round_stock(delta) if is_weighed else None,
             ref_id=ref_id,
             operator_id=operator_id,
             store_id=store_id,
