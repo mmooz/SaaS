@@ -6,9 +6,10 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Order, RefundRecord, ShiftSession
+from app.models import Order, ShiftSession
 from app.schemas.payment_summary_out import PaymentSummaryOut
 from app.schemas.shift_summary_out import ShiftSummaryOut
+from app.services.report_net import net_total, refund_map
 
 
 class ShiftService:
@@ -60,14 +61,21 @@ class ShiftService:
 
     @staticmethod
     def _orders(db: Session, shift: ShiftSession) -> list[Order]:
-        """查询班次时间窗内该收银员的订单。
+        """查询班次时间窗内该收银员的订单（限定本门店、本租户）。
+
+        Q21：原实现只按 ``cashier_id`` + 时间窗过滤，多门店授权的收银员会把
+        其它门店同期订单计入本店班次汇总。补 ``store_id`` / ``tenant_id`` 过滤，
+        与其余查询口径一致。
 
         :param db: 数据库会话
         :param shift: 班次
         :return: 订单列表
         """
         stmt = select(Order).where(
-            Order.cashier_id == shift.cashier_id, Order.created_at >= shift.start_at
+            Order.cashier_id == shift.cashier_id,
+            Order.store_id == shift.store_id,
+            Order.tenant_id == shift.tenant_id,
+            Order.created_at >= shift.start_at,
         )
         if shift.end_at:
             stmt = stmt.where(Order.created_at <= shift.end_at)
@@ -75,32 +83,28 @@ class ShiftService:
 
     @staticmethod
     def summary(db: Session, shift: ShiftSession) -> ShiftSummaryOut:
-        """统计班次销售与支付方式汇总（已扣除退款）。
+        """统计班次销售与支付方式汇总（净额法，与报表口径严格一致）。
+
+        Q05：退款映射与净销售额一律复用 ``services/report_net.py``，删除本类
+        原有的自建净额逻辑，消除「报表一套 / 班次一套」的口径矛盾（拍板 3）。
+        输出结构不变，仅数值口径与五类报表统一。
 
         :param db: 数据库会话
         :param shift: 班次
         :return: 班次汇总
         """
         orders = ShiftService._orders(db, shift)
-        order_ids = [o.id for o in orders]
-        refund_map: dict[int, float] = {}
-        if order_ids:
-            rows = db.execute(
-                select(RefundRecord.order_id, RefundRecord.amount).where(
-                    RefundRecord.order_id.in_(order_ids)
-                )
-            ).all()
-            for order_id, amount in rows:
-                refund_map[order_id] = refund_map.get(order_id, 0) + float(amount or 0)
+        # 传入同一订单集，保证 refund_map 与 net_total 使用完全相同的订单范围；
+        # 口径为「按订单关联、区间内订单统计退款」，见 report_net 顶部说明。
+        window_end = shift.end_at or datetime.now()
+        refunds = refund_map(db, shift.start_at, window_end, shift.store_id, orders=orders)
+        total_sales = net_total(orders, refunds)
 
         # 按支付方式累计金额与笔数（净额 = 原支付金额 - 本单退款，按支付比例摊回）
         method_amount: dict[str, float] = {}
         method_count: dict[str, int] = {}
-        total_sales = 0.0
         for order in orders:
-            refunded = refund_map.get(order.id, 0)
-            net = max(0.0, (order.total_amount or 0) - refunded)
-            total_sales += net
+            refunded = refunds.get(order.id, 0)
             try:
                 pay = json.loads(order.pay_details) if order.pay_details else {}
             except (TypeError, ValueError):
@@ -126,8 +130,8 @@ class ShiftService:
         return ShiftSummaryOut(
             shift=shift,
             order_count=len(orders),
-            total_sales=round(total_sales, 2),
-            refund_amount=round(sum(refund_map.values()), 2),
+            total_sales=total_sales,
+            refund_amount=round(sum(refunds.values()), 2),
             payments=payments,
             cash_should=round((shift.base_cash or 0) + cash, 2),
             actual_cash=None,
