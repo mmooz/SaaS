@@ -30,7 +30,10 @@ class Order(Base):
     cashier_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     # 交接班会话 ID
     shift_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # 订单状态：pending=进行中，paid=已结算，refunded=已退款
+    # 订单状态：值域见 services/order_status.py
+    # （pending / paid / refunded / partially_refunded）。
+    # B3 保持 String(16) 定义不动（SQLite 不校验 VARCHAR 长度，报表净额法也不再
+    # 依赖 status 过滤）；列宽随 PG baseline 一次性扩 String(32) 并加 CHECK 约束。
     status: Mapped[str] = mapped_column(String(16), default="paid")
     # 应收总额
     total_amount: Mapped[float] = mapped_column(Float, default=0)

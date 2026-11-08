@@ -28,3 +28,7 @@ class MemberTransactionOut(BaseModel):
     operator_id: SnowflakeId | None
     # 流水时间
     created_at: datetime
+    # Q24 流水级标注：门店归属是否可信（历史流水为 False）。
+    # 可选新增字段、默认 True，向后兼容；由 API 依据 MEMBER_TX_STORE_RELIABLE_SINCE
+    # 显式覆盖，不改库内历史数据、不新增 DB 列、不新增迁移。
+    store_attribution_reliable: bool = True

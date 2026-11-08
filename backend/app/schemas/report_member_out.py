@@ -22,3 +22,7 @@ class ReportMemberOut(BaseModel):
     repurchase_rate: float = 0
     # 会员消费排行
     items: list[ReportMemberRow]
+    # Q24 历史门店归属标注：查询区间覆盖可信基线之前（或基线未配置）时为
+    # 「历史数据门店归属不可信」，否则为 None。可选新增字段，向后兼容，
+    # 不回填历史数据、不新增 DB 列、不新增 Alembic 迁移。
+    store_attribution_note: str | None = None

@@ -1,4 +1,9 @@
-"""报表 API：销售日报月报、商品排行、时段分析、毛利分析、会员分析。"""
+"""报表 API：销售日报月报、商品排行、时段分析、毛利分析、会员分析。
+
+Q05 / 拍板 3：五类报表统一采用净额法（唯一实现见 ``services/report_net.py``），
+**不再按 ``Order.status == "paid"`` 过滤**；退款后整单不再从报表消失，
+销售额 = 原单金额 − 该单累计退款额，销售笔数仍计原单 1 笔。
+"""
 
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
@@ -21,6 +26,11 @@ from app.schemas.report_rank_out import ReportRankOut
 from app.schemas.report_rank_row import ReportRankRow
 from app.schemas.report_sales_summary import ReportSalesSummary
 from app.schemas.report_trend_point import ReportTrendPoint
+from app.services.member_tx_store_service import (
+    STORE_ATTRIBUTION_NOTE_UNRELIABLE,
+    is_store_attribution_reliable,
+)
+from app.services.report_net import net_item_share, net_order, net_total, refund_map
 
 # 报表路由
 router = APIRouter(prefix="/api/reports", tags=["报表中心"])
@@ -36,11 +46,15 @@ def _window(start: date, end: date) -> tuple[datetime, datetime]:
     return datetime.combine(start, time.min), datetime.combine(end + timedelta(days=1), time.min)
 
 
-def _paid_orders(db: Session, start: datetime, end: datetime, store_id: int) -> list[Order]:
-    """查询时间窗口内已结算的订单（限定当前门店）。
+def _window_orders(db: Session, start: datetime, end: datetime, store_id: int) -> list[Order]:
+    """查询时间窗口内的**全部**订单（限定当前门店，不再按 status 过滤）。
+
+    Q05：订单退款后状态会变为 ``refunded`` / ``partially_refunded``，若仍按
+    ``status == "paid"`` 过滤，整单（含未退商品行）会从所有报表消失。
+    净额法改由 ``report_net.refund_map`` 扣减退款额，订单集本身不再剔除。
 
     :param db: 数据库会话
-    :param start: 开始时间
+    :param start: 开始时间（含）
     :param end: 结束时间（不含）
     :param store_id: 门店 ID
     :return: 订单列表
@@ -49,7 +63,6 @@ def _paid_orders(db: Session, start: datetime, end: datetime, store_id: int) -> 
         db.scalars(
             select(Order).where(
                 Order.store_id == store_id,
-                Order.status == "paid",
                 Order.created_at >= start,
                 Order.created_at < end,
             )
@@ -59,6 +72,9 @@ def _paid_orders(db: Session, start: datetime, end: datetime, store_id: int) -> 
 
 def _item_amount_rows(db: Session, start: datetime, end: datetime, store_id: int):
     """查询时间窗口内的订单明细，附带商品、分类与订单信息（限定当前门店）。
+
+    Q05：与 :func:`_window_orders` 使用相同的窗口条件（去掉 ``status`` 过滤），
+    保证明细集与净额退款映射的订单集严格一致。
 
     :param db: 数据库会话
     :param start: 开始时间
@@ -73,7 +89,6 @@ def _item_amount_rows(db: Session, start: datetime, end: datetime, store_id: int
         .outerjoin(Category, Category.id == Product.category_id)
         .where(
             Order.store_id == store_id,
-            Order.status == "paid",
             Order.created_at >= start,
             Order.created_at < end,
         )
@@ -82,27 +97,22 @@ def _item_amount_rows(db: Session, start: datetime, end: datetime, store_id: int
 
 
 def _item_share_rows(db: Session, start: datetime, end: datetime, store_id: int):
-    """查询订单明细，并按订单实收金额分摊满减等整单优惠。
+    """查询订单明细，并按净额法把整单退款额分摊到每一条明细行。
+
+    Q05 / 主理人裁定：``share(i) = i.amount × (net(o) / Σ明细金额)``，
+    **保留全部未退商品行**（行不消失、金额按净额比例打折），不整单剔除。
+    计算全部委托 ``report_net``，本文件不再另写一套分摊逻辑。
 
     :param db: 数据库会话
     :param start: 开始时间
     :param end: 结束时间（不含）
     :param store_id: 门店 ID
-    :return: [(订单明细, 商品, 分类, 分摊后销售额)] 列表
+    :return: [(订单明细, 商品, 分类, 分摊后净额销售额)] 列表
     """
     rows = _item_amount_rows(db, start, end, store_id)
-    # 每个订单的明细金额合计，用于计算整单优惠分摊比例
-    order_sums: dict[int, float] = defaultdict(float)
-    for item, _product, _category, order in rows:
-        order_sums[order.id] += item.amount
-
-    result = []
-    for item, product, category, order in rows:
-        base = order_sums[order.id]
-        # 订单实收 / 明细合计；明细合计为 0 时不分摊
-        factor = order.total_amount / base if base else 1.0
-        result.append((item, product, category, round(item.amount * factor, 2)))
-    return result
+    orders = _window_orders(db, start, end, store_id)
+    refunds = refund_map(db, start, end, store_id, orders=orders)
+    return net_item_share(rows, refunds)
 
 
 def _item_qty(item: OrderItem) -> float:
@@ -124,21 +134,21 @@ def daily_report(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """销售日报月报：返回区间汇总与按日/按周趋势（当前门店）。"""
+    """销售日报月报：返回区间汇总与按日/按周趋势（当前门店，净额法）。"""
     begin, finish = _window(start, end)
-    orders = _paid_orders(db, begin, finish, store_id)
+    orders = _window_orders(db, begin, finish, store_id)
+    refunds = refund_map(db, begin, finish, store_id, orders=orders)
 
-    # 区间汇总
-    sales = round(sum(o.total_amount for o in orders), 2)
+    # 区间汇总：销售额为净额，销售笔数仍为原单笔数（部分退款仍计 1 笔）
+    sales = net_total(orders, refunds)
     order_count = len(orders)
     avg_price = round(sales / order_count, 2) if order_count else 0
-    # 称重重量：仅统计称重商品明细
+    # 称重重量：窗口内订单的称重明细（Q05 去掉 paid 过滤，退款单不再整单消失）
     weight = db.scalar(
         select(func.coalesce(func.sum(OrderItem.weight_kg), 0))
         .join(Order, Order.id == OrderItem.order_id)
         .where(
             Order.store_id == store_id,
-            Order.status == "paid",
             Order.created_at >= begin,
             Order.created_at < finish,
             OrderItem.is_weighted.is_(True),
@@ -152,7 +162,6 @@ def daily_report(
             .join(Order, Order.id == OrderItem.order_id)
             .where(
                 Order.store_id == store_id,
-                Order.status == "paid",
                 Order.created_at >= begin,
                 Order.created_at < finish,
                 OrderItem.is_weighted.is_(True),
@@ -168,7 +177,7 @@ def daily_report(
         weighted_orders=weighted_orders,
     )
 
-    # 趋势分组：按日或按 ISO 周
+    # 趋势分组：按日或按 ISO 周，逐单累加净额
     buckets: dict[tuple, dict] = {}
     for order in orders:
         created = order.created_at
@@ -180,7 +189,7 @@ def daily_report(
             key = (created.year, created.month, created.day)
             label = created.strftime("%m-%d")
         record = buckets.setdefault(key, {"label": label, "sales": 0.0, "orders": 0})
-        record["sales"] += order.total_amount
+        record["sales"] += net_order(order, refunds)
         record["orders"] += 1
 
     trend = [
@@ -203,7 +212,7 @@ def product_rank(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """商品销售排行：按销售额倒序返回 Top N（当前门店）。"""
+    """商品销售排行：按净额销售额倒序返回 Top N（当前门店，保留未退商品行）。"""
     begin, finish = _window(start, end)
     rows = _item_share_rows(db, begin, finish, store_id)
 
@@ -254,14 +263,15 @@ def hourly_report(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """时段分析：逐小时销售额曲线与早/午/晚高峰汇总（当前门店）。"""
+    """时段分析：逐小时净额销售额曲线与早/午/晚高峰汇总（当前门店）。"""
     begin, finish = _window(start, end)
-    orders = _paid_orders(db, begin, finish, store_id)
+    orders = _window_orders(db, begin, finish, store_id)
+    refunds = refund_map(db, begin, finish, store_id, orders=orders)
 
     buckets: dict[int, list[float]] = defaultdict(lambda: [0.0, 0])
     for order in orders:
         hour = order.created_at.hour
-        buckets[hour][0] += order.total_amount
+        buckets[hour][0] += net_order(order, refunds)
         buckets[hour][1] += 1
 
     points = [
@@ -297,7 +307,7 @@ def profit_report(
     db: Session = Depends(get_db),
     store_id: int = Depends(get_store_id),
 ):
-    """毛利分析：按分类统计销售额、成本与毛利（当前门店）。"""
+    """毛利分析：按分类统计净额销售额、成本与毛利（当前门店）。"""
     begin, finish = _window(start, end)
     rows = _item_share_rows(db, begin, finish, store_id)
 
@@ -346,14 +356,15 @@ def member_report(
     tenant_id: int = Depends(get_tenant_id),
     store_id: int = Depends(get_store_id),
 ):
-    """会员分析：会员规模按租户统计，消费贡献与排行按当前门店。"""
+    """会员分析：会员规模按租户统计，消费贡献与排行按当前门店（净额法）。"""
     begin, finish = _window(start, end)
-    orders = _paid_orders(db, begin, finish, store_id)
+    orders = _window_orders(db, begin, finish, store_id)
+    refunds = refund_map(db, begin, finish, store_id, orders=orders)
 
-    # 全部销售与会员销售（按当前门店订单口径）
-    total_sales = sum(o.total_amount for o in orders)
+    # 全部销售与会员销售（按当前门店订单净额口径）
+    total_sales = net_total(orders, refunds)
     member_orders = [o for o in orders if o.member_id is not None]
-    member_sales = sum(o.total_amount for o in member_orders)
+    member_sales = net_total(member_orders, refunds)
 
     # 会员规模与区间新增（租户级共享会员库）
     member_total = int(
@@ -371,10 +382,10 @@ def member_report(
         or 0
     )
 
-    # 按会员聚合消费金额与笔数
+    # 按会员聚合净额消费金额与笔数
     agg: dict[int, list[float]] = defaultdict(lambda: [0.0, 0])
     for order in member_orders:
-        agg[order.member_id][0] += order.total_amount
+        agg[order.member_id][0] += net_order(order, refunds)
         agg[order.member_id][1] += 1
 
     # 复购率：消费 2 笔及以上的会员 / 有消费的会员
@@ -404,6 +415,14 @@ def member_report(
         )
     items.sort(key=lambda r: r.amount, reverse=True)
 
+    # Q24：区间覆盖可信基线之前（或基线未配置）时，明确标注历史门店归属不可信，
+    # 零回填、不改历史数据；区间全在新数据时返回 None（不展示提示条）。
+    store_attribution_note = (
+        None
+        if is_store_attribution_reliable(begin)
+        else STORE_ATTRIBUTION_NOTE_UNRELIABLE
+    )
+
     return ReportMemberOut(
         member_total=member_total,
         new_in_range=new_in_range,
@@ -412,4 +431,5 @@ def member_report(
         member_ratio=round(member_sales / total_sales * 100, 1) if total_sales else 0,
         repurchase_rate=repurchase_rate,
         items=items[:limit],
+        store_attribution_note=store_attribution_note,
     )
