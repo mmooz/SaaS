@@ -70,6 +70,9 @@
             <el-form-item label="储值充值赠送比例">
               <el-input-number v-model="cashierForm.rechargeGift" :min="0" :step="1" style="width: 120px" />
               <span class="form-hint">%（充 100 送 10 即填 10）</span>
+              <!-- R4：单位是百分比，服务端按充值金额 × (该比例 ÷ 100) 换算赠送积分，
+                   不再单独配置「每元赠送积分」；数值只改后台配置即可生效。 -->
+              <div class="form-hint">单位换算：服务端按充值金额 × (该比例 ÷ 100) 计算赠送积分，无需另填每元赠送积分。</div>
             </el-form-item>
             <el-form-item label="允许负库存">
               <el-switch v-model="cashierForm.allowNegative" inline-prompt active-text="允许" inactive-text="禁止" />

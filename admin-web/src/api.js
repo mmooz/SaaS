@@ -239,8 +239,9 @@ export function updateMember(id, data) {
 
 /**
  * 会员充值
+ * R4：赠送积分由服务端按 rechargeGift 比例换算，不再发送 bonus_points 死字段。
  * @param {number} id 会员 ID
- * @param {object} data { amount, giftAmount, bonusPoints }
+ * @param {object} data { amount, giftAmount }
  * @returns {Promise<object>} 会员信息
  */
 export function rechargeMember(id, data) {
@@ -249,7 +250,6 @@ export function rechargeMember(id, data) {
     body: JSON.stringify({
       amount: data.amount,
       gift_amount: data.giftAmount || 0,
-      bonus_points: data.bonusPoints || 0,
     }),
   })
 }

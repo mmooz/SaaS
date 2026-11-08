@@ -229,6 +229,8 @@ export function fetchOrders({ start, end, status, keyword, page = 1, pageSize = 
 
 /**
  * 订单退款 / 单项退货
+ * Q17：退款主体由服务端令牌用户决定，不再发送 cashier_id / authorizer_id。
+ * 旧客户端仍传这两个字段时服务端会忽略（RefundCreate extra="ignore"），不会返回 422。
  * @param {string} orderNo 订单号
  * @param {object} data 退款数据
  * @param {string} data.refundType full=整单退款 item=单项退货
@@ -236,8 +238,6 @@ export function fetchOrders({ start, end, status, keyword, page = 1, pageSize = 
  * @param {string} [data.reason] 退款原因
  * @param {string} [data.refundNo] 退款单号（离线补传时保留）
  * @param {string} [data.createdAt] 退款时间（离线补传时保留）
- * @param {number} [data.cashierId] 操作收银员 ID
- * @param {number} [data.authorizerId] 店长授权人 ID
  * @returns {Promise<object>} 退款单
  */
 export function refundOrder(orderNo, data) {
@@ -249,8 +249,6 @@ export function refundOrder(orderNo, data) {
       refund_type: data.refundType,
       item_ids: data.itemIds || [],
       reason: data.reason || null,
-      cashier_id: data.cashierId ?? null,
-      authorizer_id: data.authorizerId ?? null,
     }),
   })
 }
@@ -292,14 +290,15 @@ export function createMember(data) {
 
 /**
  * 会员储值充值
+ * R4：赠送积分由服务端按 rechargeGift 比例换算，不再发送 bonus_points 死字段。
  * @param {number} memberId 会员 ID
- * @param {object} data { amount, bonusPoints }
+ * @param {object} data { amount }
  * @returns {Promise<object>} 更新后的会员信息
  */
 export function rechargeMember(memberId, data) {
   return request(`/api/members/${memberId}/recharge`, {
     method: 'POST',
-    body: JSON.stringify({ amount: data.amount, bonus_points: data.bonusPoints || 0 }),
+    body: JSON.stringify({ amount: data.amount }),
   })
 }
 
