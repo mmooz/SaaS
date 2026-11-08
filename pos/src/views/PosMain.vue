@@ -12,6 +12,7 @@
       </div>
       <div class="header-clock num">{{ now }}</div>
       <div class="header-actions">
+        <!-- 交易 / 查询：挂单、订单、补打、退款（店长及以上） -->
         <el-button size="large" @click="hangDrawer = true">
           <el-icon><Folder /></el-icon>&nbsp;挂单<span v-if="store.hangOrders.length" class="btn-badge">{{ store.hangOrders.length }}</span>
         </el-button>
@@ -19,9 +20,13 @@
         <el-button size="large" @click="$router.push('/reprint')"><el-icon><Printer /></el-icon>&nbsp;补打</el-button>
         <!-- Q17：仅店长及以上可见退款入口，收银员无入口 -->
         <el-button v-if="isManager" size="large" @click="$router.push('/refund')"><el-icon><RefreshLeft /></el-icon>&nbsp;退款</el-button>
-        <el-button v-if="isManager" size="large" type="warning" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;管理</el-button>
+        <el-divider direction="vertical" />
+        <!-- 管理后台入口：店长及以上可进，普通按钮避免误导为激活态 -->
+        <el-button v-if="isManager" size="large" @click="$router.push('/manage')"><el-icon><Menu /></el-icon>&nbsp;管理</el-button>
+        <el-divider direction="vertical" />
+        <!-- 系统：交接班、设置、退出 -->
         <el-button size="large" @click="$router.push('/shift')"><el-icon><Switch /></el-icon>&nbsp;交接班</el-button>
-        <el-button size="large" @click="$router.push('/settings')"><el-icon><Setting /></el-icon></el-button>
+        <el-button size="large" @click="$router.push('/settings')"><el-icon><Setting /></el-icon>&nbsp;设置</el-button>
         <el-button size="large" @click="logout"><el-icon><SwitchButton /></el-icon>&nbsp;退出</el-button>
       </div>
     </header>
@@ -1023,9 +1028,15 @@ onBeforeUnmount(() => {
 .header-actions {
   display: flex;
   gap: 10px;
+  align-items: center;
 }
 .header-actions :deep(.el-button) {
   border-radius: 10px;
+}
+/* 顶栏分组分隔线：与大号按钮等高，避免偏矮 */
+.header-actions :deep(.el-divider--vertical) {
+  height: 26px;
+  margin: 0;
 }
 
 /* ----- 主体三栏 ----- */

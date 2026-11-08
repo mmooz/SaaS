@@ -9,40 +9,36 @@
           <div class="brand-sub">电子秤收银系统</div>
         </div>
       </div>
-      <el-menu :default-active="activeMenu" router class="side-menu">
+      <el-menu
+        :default-active="activeMenu"
+        :default-openeds="openGroups"
+        router
+        class="side-menu"
+      >
         <el-menu-item index="/manage">
           <el-icon><Odometer /></el-icon><span>首页仪表盘</span>
         </el-menu-item>
-        <el-menu-item index="/manage/products">
-          <el-icon><Box /></el-icon><span>商品管理</span>
-        </el-menu-item>
-        <el-menu-item index="/manage/categories">
-          <el-icon><FolderOpened /></el-icon><span>分类管理</span>
-        </el-menu-item>
-        <el-menu-item index="/manage/members">
-          <el-icon><Avatar /></el-icon><span>会员管理</span>
-        </el-menu-item>
-        <el-menu-item index="/manage/promotions">
-          <el-icon><PriceTag /></el-icon><span>促销管理</span>
-        </el-menu-item>
-        <el-menu-item index="/manage/inventory">
-          <el-icon><SetUp /></el-icon><span>库存管理</span>
-        </el-menu-item>
+        <el-sub-menu index="g-data">
+          <template #title><el-icon><Box /></el-icon><span>基础数据</span></template>
+          <el-menu-item index="/manage/products"><el-icon><Box /></el-icon>商品管理</el-menu-item>
+          <el-menu-item index="/manage/categories"><el-icon><FolderOpened /></el-icon>分类管理</el-menu-item>
+          <el-menu-item index="/manage/members"><el-icon><Avatar /></el-icon>会员管理</el-menu-item>
+          <el-menu-item index="/manage/promotions"><el-icon><PriceTag /></el-icon>促销管理</el-menu-item>
+          <el-menu-item index="/manage/inventory"><el-icon><SetUp /></el-icon>库存管理</el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="/manage/reports">
           <el-icon><DataAnalysis /></el-icon><span>报表中心</span>
         </el-menu-item>
-        <el-menu-item index="/orders">
-          <el-icon><Tickets /></el-icon><span>订单查询</span>
-        </el-menu-item>
-        <el-menu-item index="/shift">
-          <el-icon><Clock /></el-icon><span>交接班</span>
-        </el-menu-item>
-        <el-menu-item index="/settings">
-          <el-icon><Setting /></el-icon><span>系统设置</span>
-        </el-menu-item>
-        <el-menu-item index="/">
-          <el-icon><ArrowLeft /></el-icon><span>返回收银台</span>
-        </el-menu-item>
+        <el-sub-menu index="g-biz">
+          <template #title><el-icon><Tickets /></el-icon><span>业务办理</span></template>
+          <el-menu-item index="/orders"><el-icon><Tickets /></el-icon>订单查询</el-menu-item>
+          <el-menu-item index="/shift"><el-icon><Clock /></el-icon>交接班</el-menu-item>
+        </el-sub-menu>
+        <el-sub-menu index="g-sys">
+          <template #title><el-icon><Setting /></el-icon><span>系统</span></template>
+          <el-menu-item index="/settings"><el-icon><Setting /></el-icon>系统设置</el-menu-item>
+          <el-menu-item index="/"><el-icon><ArrowLeft /></el-icon>返回收银台</el-menu-item>
+        </el-sub-menu>
       </el-menu>
     </el-aside>
 
@@ -102,6 +98,21 @@ const cashier = loadCashier() || {}
 
 // 当前激活的菜单项（按路由路径匹配）
 const activeMenu = computed(() => route.path)
+
+// 当前路由所属分组：加载时自动展开对应子菜单，避免进入子页后菜单折叠
+const openGroups = computed(() => {
+  const p = route.path
+  if (['/manage/products', '/manage/categories', '/manage/members', '/manage/promotions', '/manage/inventory'].includes(p)) {
+    return ['g-data']
+  }
+  if (['/orders', '/shift'].includes(p)) {
+    return ['g-biz']
+  }
+  if (['/settings', '/'].includes(p)) {
+    return ['g-sys']
+  }
+  return []
+})
 
 // 当前页面标题（取自路由 meta）
 const currentTitle = computed(() => route.meta.title || '管理后台')
