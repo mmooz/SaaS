@@ -34,6 +34,23 @@ class Settings(BaseSettings):
     snowflake_worker_id: int = 1
     snowflake_datacenter_id: int = 1
 
+    # ---- Q24 会员流水历史门店归属分界（拍板 2：不重算历史、零 DDL）----
+    # 取 3f9a1c7b2d55 迁移执行 / 上线时间，ISO 8601（建议带 Z，按 naive UTC 比较）。
+    # 留空 = 未配置，安全回退为「全部历史流水标注门店归属不可信」；
+    # 该配置只影响报表标注，不改库内数据、不新增列、不新增迁移。
+    member_tx_store_reliable_since: str = ""
+
+    # ---- R20 临时资金管控（Q06 完成后由 B4 统一解除，非永久业务逻辑）----
+    # 数值待产品确认：确认后只改 .env / 配置中心，不改代码、不发版；
+    # 前端文案一律不写死具体数字（只说「限额 / 时限」）。
+    # 在线储值支付开关：默认关闭。⚠️ 警告：Q06 结算接口完成前**严禁设为 true**，
+    # 否则「有订单无扣款」的「不扣先返」套利面重新敞开（见设计 A.3.5）。
+    online_stored_value_payment_enabled: bool = False
+    # 离线订单补传金额上限（元）
+    offline_order_max_amount: float = 200.0
+    # 离线订单发生时间距今时限（小时）
+    offline_order_max_age_hours: float = 2.0
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 

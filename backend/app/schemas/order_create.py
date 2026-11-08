@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from app.schemas.order_item_create import OrderItemCreate
+from app.services.order_status import OrderStatus
 
 
 class OrderCreate(BaseModel):
@@ -25,13 +26,19 @@ class OrderCreate(BaseModel):
     cashier_id: int | None = None
     # 交接班会话 ID
     shift_id: int | None = None
-    # 订单状态：客户端只能创建待支付/已支付单，退款状态由退款流程写入
-    status: str = Field("paid", pattern="^(pending|paid)$")
+    # 订单状态：客户端只能创建待支付/已支付单，退款状态由退款流程写入。
+    # 值域引用 OrderStatus 常量；Order.status 列宽仍为 String(16)（随 PG baseline 扩 32）。
+    status: str = Field(
+        OrderStatus.PAID,
+        pattern=rf"^({OrderStatus.PENDING}|{OrderStatus.PAID})$",
+    )
     # 应收总额
     total_amount: float = Field(0, ge=0)
     # 优惠金额（Q22：不得为负）
     discount_amount: float = Field(0, ge=0)
-    # 支付方式明细（JSON 字符串或原始字符串）
+    # 支付方式明细（B3 冻结：仍为中文自由文本 JSON，如 {"储值": x, "现金": y}）。
+    # 结构化契约（支付方式枚举 + 金额）由 B4 / Q06 新增结算接口定义，本批不变；
+    # 前端 pay_details 生成逻辑亦逐字符不动，避免 Q06 改结构后整体返工（见设计 A.3.2）。
     pay_details: str | None = None
     # 关联会员 ID
     member_id: int | None = None
