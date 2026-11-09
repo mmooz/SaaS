@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     # 纵深防御：默认关闭，避免 create_all 与 Alembic 并存导致 schema 失控
     auto_create_tables: bool = False
 
+    # 是否在启动时自动执行 Alembic 迁移（生产环境默认开启，自愈缺列问题）
+    # 与 auto_create_tables 职责分离：migrate 走 Alembic（真实环境权威 schema 来源），
+    # create_all 仅开发期可选开关。迁移幂等：对已达 head 的库为安全空操作。
+    auto_migrate: bool = True
+
     # 是否在启动时写入默认登录账号（仅 users 表为空时生效，开发期便利）
     # 纵深防御：默认关闭，避免自动写入弱口令演示账号
     auto_seed_users: bool = False
